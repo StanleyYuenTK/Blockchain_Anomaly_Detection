@@ -8,3 +8,5 @@ __pycache__/
 # Logs
 *.log
 training_log.txt
+
+backup/
