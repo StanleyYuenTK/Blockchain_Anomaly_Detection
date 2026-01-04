@@ -1,6 +1,7 @@
 #### install torch geometric
 1. `pip uninstall -y torch torchvision torchaudio torch-geometric torch-geometric-temporal torch-sparse torch-scatter torch-cluster torch-spline-conv pyg-lib`  ## uninstall CPU版
-2. `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126`  ## install 最新GPU版
+2. `pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126`  ## install 最新GPU版
+
 
 
 ####   install torch geometric
