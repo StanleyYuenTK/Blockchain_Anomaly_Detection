@@ -1,0 +1,10 @@
+nodes.csv
+edges.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+training_log.txt
