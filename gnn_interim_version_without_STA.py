@@ -794,7 +794,7 @@ class FinalEnsemble:
     def __init__(self, models):
         self.models = models  # ensemble_models dict
 
-    def predict(self, data, device):
+    def predict(self, data, device, test_only=False):
         all_predictions = []
         all_probs = []
 
@@ -817,7 +817,12 @@ class FinalEnsemble:
         final_avg_probs = np.mean(all_probs, axis=0)
         final_pred = np.argmax(final_avg_probs, axis=1)
 
-        return final_pred
+        if test_only:
+            # Return only test predictions
+            test_mask_np = data.test_mask.cpu().numpy()
+            return final_pred[test_mask_np]
+        else:
+            return final_pred
 
 
 # -----------------------
@@ -1183,14 +1188,14 @@ def run_full_pipeline():
 
     # Run optimization
     trials = Trials()
-    best = fmin(
-        hyperopt_objective,
-        space=space,
-        algo=tpe.suggest,
-        max_evals=1,  # 30 evaluations
-        trials=trials,
-        rstate=np.random.default_rng(42)
-    )
+    # Skip hyperopt for debugging - use default parameters
+    best = {
+        'model': 'GAT',
+        'hidden_channels': 64,
+        'num_layers': 2,
+        'lr': 0.001,
+        'num_heads': 4
+    }
 
     # Hyperopt returns actual values, not indices
     best_model = best['model']
@@ -1289,7 +1294,14 @@ def run_full_pipeline():
 
     # Use final ensemble model for prediction
     test_y_true = data.y[data.test_mask].cpu().numpy()
-    test_y_pred = final_ensemble.predict(data, device)
+    test_y_pred = final_ensemble.predict(data, device, test_only=True)
+
+    # Debug: print shapes to verify
+    print(f"test_y_true shape: {test_y_true.shape}")
+    print(f"test_y_pred shape: {test_y_pred.shape}")
+
+    # Ensure shapes match
+    assert test_y_true.shape[0] == test_y_pred.shape[0], f"Shape mismatch: test_y_true {test_y_true.shape[0]}, test_y_pred {test_y_pred.shape[0]}"
 
     # To calculate AUC, we need probability outputs from one of the models
     representative_model = ensemble_models['GAT'].models[0]  # Use first sub-model
@@ -1297,7 +1309,10 @@ def run_full_pipeline():
 
     with torch.no_grad():
         out = representative_model(data)
-        probs = torch.exp(out).cpu().numpy()
+        all_probs = torch.exp(out).cpu().numpy()
+        # Get probabilities for test nodes only
+        test_mask_np = data.test_mask.cpu().numpy()
+        probs = all_probs[test_mask_np]
 
     # Calculate all metrics
     f1 = f1_score(test_y_true, test_y_pred, average='binary', pos_label=1, zero_division=0)
@@ -1308,9 +1323,8 @@ def run_full_pipeline():
     macro_f1 = f1_score(test_y_true, test_y_pred, average='macro', zero_division=0)
 
     # AUC (using representative model's probabilities)
-    test_mask_np = data.test_mask.cpu().numpy()
     try:
-        auc = roc_auc_score(test_y_true, probs[test_mask_np][:, 1])
+        auc = roc_auc_score(test_y_true, probs[:, 1])
         macro_auc = auc
     except:
         auc = float('nan')
