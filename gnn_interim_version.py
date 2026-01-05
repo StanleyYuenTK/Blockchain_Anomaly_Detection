@@ -495,7 +495,7 @@ class IsolationForestBaseline:
         if self.contamination == 'auto':
             # Use the proportion of illegal transactions (class 1) as contamination
             contamination_ratio = np.mean(y_train == 1)
-            self.contamination = max(contamination_ratio, 0.01)  # Minimum 1%
+            self.contamination = min(max(contamination_ratio, 0.01), 0.5)  # Minimum 1%
             print(".3f")
 
         # Initialize and train Isolation Forest
@@ -1246,7 +1246,7 @@ def run_full_pipeline():
         hyperopt_objective,
         space=space,
         algo=tpe.suggest,
-        max_evals=30,  # 30 evaluations
+        max_evals=1,  # 30 evaluations
         trials=trials,
         rstate=np.random.default_rng(42)
     )

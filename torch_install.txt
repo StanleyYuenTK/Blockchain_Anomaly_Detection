@@ -5,9 +5,8 @@
 
 
 ####   install torch geometric
-1. `pip install torch_geometric` ## install torch geometric
 2. `py -c "import torch; print(torch.__version__)"` ## check依加版本
-   \>\>\> 2.9.0
+   \>\>\> 2.8.0+cu126
 3. `py -c "import torch; print(torch.version.cuda)"` # check依加版本
    \>\>\> 12.6
 
