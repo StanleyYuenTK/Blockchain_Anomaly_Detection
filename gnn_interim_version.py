@@ -1281,7 +1281,8 @@ def run_full_pipeline():
 
     # Define search space with reasonable minimum values
     space = {
-        'model': hp.choice('model', ['GCN', 'GAT', 'GIN', 'GraphSAGE', 'STA']),
+        # 'model': hp.choice('model', ['GCN', 'GAT', 'GIN', 'GraphSAGE', 'STA']),
+        'model': hp.choice('model', ['GCN', 'GAT', 'GIN', 'GraphSAGE']),
         'hidden_channels': hp.choice('hidden_channels', [64, 128, 256]),  # Removed 32 to ensure sufficient capacity
         'dropout': hp.uniform('dropout', 0.1, 0.5),
         'num_layers': hp.choice('num_layers', [2, 3]),  # Limited to 2-3 layers to avoid dimension collapse
@@ -1359,14 +1360,14 @@ def run_full_pipeline():
             'num_layers': best_num_layers,
             'dropout': best['dropout']
         },
-        'STA': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_heads': best_num_heads,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        }
+        # 'STA': {
+        #     'in_channels': data.x.size(1),
+        #     'hidden_channels': best_hidden_channels,
+        #     'out_channels': 2,
+        #     'num_heads': best_num_heads,
+        #     'num_layers': best_num_layers,
+        #     'dropout': best['dropout']
+        # }
     }
 
     # Debug: Check data dimensions before training
@@ -1397,7 +1398,7 @@ def run_full_pipeline():
         ensemble_models[model_name] = ensemble
 
     # Create final ensemble (combining four models including STA)
-    print("\n4. Creating final ensemble model (GAT + GIN + GraphSAGE + STA)...")
+    # print("\n4. Creating final ensemble model (GAT + GIN + GraphSAGE + STA)...")
     print("\n4. Creating final ensemble model (GAT + GIN + GraphSAGE)...")
 
     final_ensemble = FinalEnsemble(ensemble_models)
