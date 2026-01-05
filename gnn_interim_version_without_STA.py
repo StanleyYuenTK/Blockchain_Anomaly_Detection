@@ -1004,14 +1004,22 @@ def run_full_pipeline():
     # Run optimization
     trials = Trials()
     # Skip hyperopt for debugging - use default parameters
-    best = {
-        'model': 'GAT',
-        'hidden_channels': 64,
-        'num_layers': 2,
-        'lr': 0.001,
-        'num_heads': 4,
-        'dropout': 0.2
-    }
+    # best = {
+    #     'model': 'GAT',
+    #     'hidden_channels': 64,
+    #     'num_layers': 2,
+    #     'lr': 0.001,
+    #     'num_heads': 4,
+    #     'dropout': 0.2
+    # }
+    best = fmin(
+        hyperopt_objective,
+        space=space,
+        algo=tpe.suggest,
+        max_evals=8,  # 30 evaluations
+        trials=trials,
+        rstate=np.random.default_rng(42)
+    )
 
     # Hyperopt returns actual values, not indices
     best_model = best['model']
