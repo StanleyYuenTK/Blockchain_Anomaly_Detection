@@ -401,7 +401,7 @@ class IsolationForestBaseline:
             contamination_ratio = np.mean(y_train == 1)
             # Cap at 0.5 as required by sklearn's IsolationForest (must be <= 0.5)
             self.contamination = min(max(contamination_ratio, 0.01), 0.5)  # Min 1%, Max 50%
-            print(".3f")
+            
 
         # Initialize and train Isolation Forest
         self.model = IsolationForest(
@@ -870,191 +870,6 @@ def perform_feature_extraction_and_reduction(model, data, device, reduction_meth
     return extracted, reduced
 
 
-# -----------------------
-# GNNExplainer for Model Interpretation
-# -----------------------
-
-# def explain_model(model, data, device, num_samples=10, output_dir='explanations'):
-#     """
-#     Use GNNExplainer to explain model predictions for nodes predicted as illicit (Class 1) in test set
-#     Generate visualizations of node feature importance and edge importance.
-
-#     Args:
-#         model: Trained GNN model
-#         data: Graph data (torch_geometric.data.Data)
-#         device: Computing device
-#         num_samples: Number of samples to explain
-#         output_dir: Output directory
-#     """
-#     # Ensure output directory exists
-#     os.makedirs(output_dir, exist_ok=True)
-
-#     # Move model to specified device
-#     model = model.to(device)
-#     data = data.to(device)
-
-#     # Get test set nodes predicted as Class 1 (illicit)
-#     model.eval()
-#     with torch.no_grad():
-#         out = model(data)
-#         pred = out.argmax(dim=1)
-
-#     # Filter test set nodes predicted as Class 1
-#     test_pred_class_1 = torch.where((data.test_mask) & (pred == 1))[0]
-
-#     if len(test_pred_class_1) == 0:
-#         print("Warning: No nodes in test set predicted as Class 1 (illicit)")
-#         return
-
-#     print(f"Found {len(test_pred_class_1)} nodes in test set predicted as illicit (Class 1)")
-#     print(f"Will explain first {min(num_samples, len(test_pred_class_1))} nodes")
-
-#     # Randomly select samples to explain
-#     sample_indices = test_pred_class_1[torch.randperm(len(test_pred_class_1))[:min(num_samples, len(test_pred_class_1))]]
-
-#     # Define model_forward wrapper: convert (x, edge_index) back to data object for model input
-#     def model_forward(x, edge_index):
-#         # Create a new Data object using the input x and edge_index
-#         temp_data = Data(x=x, edge_index=edge_index, y=data.y, train_mask=data.train_mask,
-#                         val_mask=data.val_mask, test_mask=data.test_mask)
-#         # Copy other attributes from original data if they exist
-#         if hasattr(data, 'timesteps'):
-#             temp_data.timesteps = data.timesteps
-#         return model(temp_data)
-
-#     # Create GNNExplainer
-#     explainer = Explainer(
-#         model=model_forward,
-#         algorithm=GNNExplainer(epochs=200),
-#         explanation_type='model',
-#         node_mask_type='attributes',
-#         edge_mask_type='object',
-#         model_config=dict(
-#             mode='classification',
-#             task_level='node',
-#             return_type='raw',
-#         ),
-#     )
-
-#     # Explain each selected node
-#     for i, node_idx in enumerate(sample_indices):
-#         print(f"Explaining node {node_idx.item()} (sample {i+1}/{len(sample_indices)})")
-
-#         try:
-#             # Generate explanation
-#             explanation = explainer(data.x, data.edge_index, index=node_idx)
-
-#             # Get node feature importance (node_mask)
-#             node_importance = explanation.node_mask
-#             if node_importance is not None:
-#                 node_importance = node_importance.cpu().numpy().flatten()
-#             else:
-#                 print(f"Warning: Node {node_idx.item()} has no node importance information")
-#                 continue
-
-#             # Get edge importance (edge_mask)
-#             edge_importance = explanation.edge_mask
-#             if edge_importance is not None:
-#                 edge_importance = edge_importance.cpu().numpy().flatten()
-#             else:
-#                 edge_importance = np.zeros(data.edge_index.size(1))
-
-#             # 1. Node feature importance visualization
-#             plt.figure(figsize=(12, 6))
-
-#             # Node feature importance histogram
-#             plt.subplot(1, 2, 1)
-#             plt.bar(range(len(node_importance)), node_importance, alpha=0.7, color='skyblue')
-#             plt.xlabel('Feature Index')
-#             plt.ylabel('Importance Score')
-#             plt.title(f'Node Feature Importance\\nNode {node_idx.item()} (Predicted: Illegal)')
-
-#             # Node feature importance heatmap (top 20 most important features)
-#             top_k = 20
-#             top_indices = np.argsort(node_importance)[-top_k:]
-#             plt.subplot(1, 2, 2)
-#             top_importance = node_importance[top_indices]
-#             plt.barh(range(top_k), top_importance, alpha=0.7, color='lightcoral')
-#             plt.yticks(range(top_k), [f'Feat {idx}' for idx in top_indices])
-#             plt.xlabel('Importance Score')
-#             plt.title(f'Top {top_k} Feature Importance')
-
-#             plt.tight_layout()
-#             plt.savefig(os.path.join(output_dir, f'node_{node_idx.item()}_feature_importance.png'), dpi=300, bbox_inches='tight')
-#             plt.close()
-
-#             # 2. Edge importance visualization - subgraph
-#             plt.figure(figsize=(12, 8))
-
-#             # Get node neighbors
-#             neighbors = data.edge_index[1][data.edge_index[0] == node_idx]
-#             if len(neighbors) == 0:
-#                 print(f"Node {node_idx.item()} has no neighbor nodes")
-#                 plt.close()
-#                 continue
-
-#             # Create subgraph
-#             all_nodes = torch.cat([torch.tensor([node_idx]), neighbors]).unique()
-#             node_map = {old_idx.item(): new_idx for new_idx, old_idx in enumerate(all_nodes)}
-
-#             # Get subgraph edges
-#             sub_edges = []
-#             sub_edge_weights = []
-#             for j, (src, tgt) in enumerate(zip(data.edge_index[0], data.edge_index[1])):
-#                 if src.item() in all_nodes and tgt.item() in all_nodes:
-#                     sub_edges.append([node_map[src.item()], node_map[tgt.item()]])
-#                     sub_edge_weights.append(edge_importance[j])
-
-#             if len(sub_edges) == 0:
-#                 print(f"Node {node_idx.item()} subgraph has no edges")
-#                 plt.close()
-#                 continue
-
-#             sub_edges = torch.tensor(sub_edges).t()
-
-#             # Create NetworkX graph
-#             G = nx.Graph()
-#             G.add_nodes_from(range(len(all_nodes)))
-#             edge_list = list(zip(sub_edges[0].tolist(), sub_edges[1].tolist()))
-#             G.add_edges_from(edge_list)
-
-#             # Get node labels
-#             node_labels = data.y[all_nodes].cpu().numpy()
-#             node_colors = ['red' if label == 1 else 'blue' for label in node_labels]
-
-#             # Draw subgraph
-#             pos = nx.spring_layout(G, seed=42)
-#             plt.subplot(1, 2, 1)
-#             nx.draw(G, pos, with_labels=True, node_color=node_colors, node_size=300,
-#                    font_size=8, font_weight='bold', alpha=0.8)
-#             plt.title(f'Subgraph for Node {node_idx.item()}\\n(Red: Illegal, Blue: Legal)')
-
-#             # Add legend
-#             red_patch = mpatches.Patch(color='red', label='Illegal')
-#             blue_patch = mpatches.Patch(color='blue', label='Legal')
-#             plt.legend(handles=[red_patch, blue_patch], loc='upper right')
-
-#             # Edge importance heatmap
-#             plt.subplot(1, 2, 2)
-#             if len(sub_edge_weights) > 0:
-#                 plt.hist(sub_edge_weights, bins=20, alpha=0.7, color='green', edgecolor='black')
-#                 plt.xlabel('Edge Importance')
-#                 plt.ylabel('Frequency')
-#                 plt.title('Edge Importance Distribution')
-#             else:
-#                 plt.text(0.5, 0.5, 'No edges in subgraph', ha='center', va='center', transform=plt.gca().transAxes)
-#                 plt.title('Edge Importance Distribution')
-
-#             plt.tight_layout()
-#             plt.savefig(os.path.join(output_dir, f'node_{node_idx.item()}_subgraph.png'), dpi=300, bbox_inches='tight')
-#             plt.close()
-
-#         except Exception as e:
-#             print(f"Error explaining node {node_idx.item()}: {str(e)}")
-#             continue
-
-#     print(f"Explanation completed! Results saved to {output_dir}")
-
 
 # -----------------------
 # Hyperopt Objective Function
@@ -1194,7 +1009,8 @@ def run_full_pipeline():
         'hidden_channels': 64,
         'num_layers': 2,
         'lr': 0.001,
-        'num_heads': 4
+        'num_heads': 4,
+        'dropout': 0.2
     }
 
     # Hyperopt returns actual values, not indices
@@ -1202,6 +1018,7 @@ def run_full_pipeline():
     best_hidden_channels = best['hidden_channels']
     best_num_layers = best['num_layers']
     best_num_heads = best['num_heads']
+    best_dropout = best['dropout']
 
     # Validate parameters to ensure they're reasonable
     if best_hidden_channels < 32:
