@@ -1,10 +1,4 @@
 pandas==2.3.3
-kagglehub==0.3.13
-torch==2.9.1
-torchvision==0.24.1
-torchaudio==2.9.1
-torch-geometric==2.7.0
-torch-geometric-temporal>=0.54.0
 scikit-learn==1.7.2
 matplotlib>=3.5.0
 numpy>=1.21.0

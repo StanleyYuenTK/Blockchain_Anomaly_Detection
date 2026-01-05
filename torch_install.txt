@@ -1,19 +1,25 @@
 #### install torch geometric
-1. `pip uninstall -y torch torchvision torchaudio torch-geometric torch-geometric-temporal torch-sparse torch-scatter torch-cluster torch-spline-conv pyg-lib`  ## uninstall CPU版
-2. `pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126`  ## install 最新GPU版
+1. ## uninstall CPU版
+   pip uninstall -y torch torchvision torchaudio torch-geometric torch-geometric-temporal torch-sparse torch-scatter torch-cluster torch-spline-conv pyg-lib  
+2. ## install 最新GPU版
+   pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu126  
 
 
 
 ####   install torch geometric
-1. `pip install torch_geometric` ## install torch geometric
-2. `py -c "import torch; print(torch.__version__)"` ## check依加版本
+
+1. ## check依加版本
+   py -c "import torch; print(torch.__version__)" 
    \>\>\> 2.9.0
-3. `py -c "import torch; print(torch.version.cuda)"` # check依加版本
+2. # check依加版本
+   py -c "import torch; print(torch.version.cuda)" 
    \>\>\> 12.6
 
-4. `pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.8.0+cu126.html` ##  因為沒有2.9.0，所以install 2.8.0
-5. `pip install torch-geometric`
-6. `pip install torch-geometric-temporal`
+3. ##  因為沒有2.9.0，所以install 2.8.0
+   pip install pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.8.0+cu126.html 
+
+4. pip install torch-geometric
+5. pip install torch-geometric-temporal
 
 python -m pip ...
 
