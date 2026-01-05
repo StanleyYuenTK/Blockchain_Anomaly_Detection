@@ -1210,8 +1210,8 @@ def run_full_pipeline():
     # Plot confusion matrix
     print("\n6. Generating visualizations...")
     os.makedirs('results', exist_ok=True)
-    plot_confusion_matrix(test_y_true, test_y_pred, classes=['Legal', 'Illegal'],
-                         title='Final Ensemble Model Confusion Matrix', save_path='results/confusion_matrix.png')
+    plot_confusion_matrix(test_y_true, test_y_pred, model_name='Final Ensemble Model',
+                         save_path='results/confusion_matrix.png')
 
     # Model explanation
     # print("\n7. Performing model explanation (GNNExplainer)...")
