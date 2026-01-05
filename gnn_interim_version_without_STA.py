@@ -3,7 +3,7 @@ gnn_interim_version.py
 
 Advanced GNN framework version focused on blockchain anomaly detection
 Includes: GCN, GAT, GIN, GraphSAGE (multi-hop neighbor information learning)
-Ensemble + Bagging, Hyperopt (Bayesian Optimization), GNNExplainer
+Ensemble + Bagging, Hyperopt (Bayesian Optimization)
 Focal Loss for class imbalance, GAN-based data augmentation, PyTorch Geometric MLP
 Isolation Forest Baseline for performance comparison
 
@@ -24,8 +24,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, MLP
-from torch_geometric_temporal.nn.attention import SpatioTemporalAttention
-from torch_geometric.explain import Explainer, GNNExplainer
 
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -744,7 +742,7 @@ class Trainer:
             'test_gmean': test_gmean
         }
 
-    def fit(self, epochs=100, extract_features_after=False, reduction_method='pca'):
+    def fit(self, epochs=100, reduction_method='pca'): #extract_features_after=False, 
         best_val_loss = float('inf')
         best_stats = None
 
@@ -779,12 +777,12 @@ class Trainer:
                       f"Val Loss: {stats['val_loss']:.4f}, Val F1: {stats['val_f1']:.4f}, "
                       f"Test F1: {stats['test_f1']:.4f}")
 
-        # Feature extraction and visualization
-        if extract_features_after:
-            print("\nExtracting features and performing visualization...")
-            extracted, reduced = perform_feature_extraction_and_reduction(
-                self.model, self.data, self.device, reduction_method=reduction_method
-            )
+        # # Feature extraction and visualization
+        # if extract_features_after:
+        #     print("\nExtracting features and performing visualization...")
+        #     extracted, reduced = perform_feature_extraction_and_reduction(
+        #         self.model, self.data, self.device, reduction_method=reduction_method
+        #     )
 
         return best_stats
 
@@ -823,6 +821,32 @@ class FinalEnsemble:
             return final_pred[test_mask_np]
         else:
             return final_pred
+
+    def predict_proba(self, data, device, test_only=False):
+        """Return averaged probabilities from all ensemble models"""
+        all_probs = []
+
+        for model_name, ensemble in self.models.items():
+            # Calculate average probabilities (soft voting) for each model type
+            probs_list = []
+            for sub_model in ensemble.models:
+                sub_model.eval()
+                with torch.no_grad():
+                    output = sub_model(data)
+                    probs = torch.exp(output).cpu().numpy()
+                    probs_list.append(probs)
+            avg_probs = np.mean(probs_list, axis=0)
+            all_probs.append(avg_probs)
+
+        # Final soft voting across all model types
+        final_avg_probs = np.mean(all_probs, axis=0)
+
+        if test_only:
+            # Return only test probabilities
+            test_mask_np = data.test_mask.cpu().numpy()
+            return final_avg_probs[test_mask_np]
+        else:
+            return final_avg_probs
 
 
 # -----------------------
@@ -895,8 +919,6 @@ def hyperopt_objective(params):
     num_layers = params['num_layers']
     dropout = params['dropout']
     num_heads = params['num_heads']
-
-    dropout = params['dropout']
 
     if model_name == 'GAT':
         model = GATModel(
@@ -1004,14 +1026,7 @@ def run_full_pipeline():
     # Run optimization
     trials = Trials()
     # Skip hyperopt for debugging - use default parameters
-    # best = {
-    #     'model': 'GAT',
-    #     'hidden_channels': 64,
-    #     'num_layers': 2,
-    #     'lr': 0.001,
-    #     'num_heads': 4,
-    #     'dropout': 0.2
-    # }
+
     best = fmin(
         hyperopt_objective,
         space=space,
@@ -1114,6 +1129,55 @@ def run_full_pipeline():
 
     final_ensemble = FinalEnsemble(ensemble_models)
 
+    # Train standalone GCN baseline model
+    print("\n4.5. Training standalone GCN baseline model...")
+    gcn_model = GCNModel(
+        in_channels=data.x.size(1),
+        hidden_channels=best_hidden_channels,
+        out_channels=2,
+        num_layers=best_num_layers,
+        dropout=best_dropout
+    )
+    gcn_model = gcn_model.to(device)
+    gcn_optimizer = torch.optim.Adam(gcn_model.parameters(), lr=best['lr'])
+    gcn_criterion = FocalLoss(alpha=1, gamma=2)
+
+    gcn_trainer = Trainer(gcn_model, data, device, gcn_optimizer, gcn_criterion)
+    gcn_best_stats = gcn_trainer.fit(epochs=100)  # Train GCN baseline for more epochs
+
+    # Get GCN predictions and probabilities for test set
+    gcn_model.eval()
+    with torch.no_grad():
+        gcn_out = gcn_model(data)
+        gcn_probs = torch.exp(gcn_out).cpu().numpy()
+        gcn_test_probs = gcn_probs[data.test_mask.cpu().numpy()]
+        gcn_test_pred = np.argmax(gcn_test_probs, axis=1)
+
+    # Calculate GCN baseline metrics
+    gcn_f1 = f1_score(test_y_true, gcn_test_pred, average='binary', pos_label=1, zero_division=0)
+    gcn_accuracy = accuracy_score(test_y_true, gcn_test_pred)
+    gcn_precision = precision_score(test_y_true, gcn_test_pred, pos_label=1, zero_division=0)
+    gcn_recall = recall_score(test_y_true, gcn_test_pred, pos_label=1, zero_division=0)
+    gcn_macro_recall = recall_score(test_y_true, gcn_test_pred, average='macro', zero_division=0)
+    gcn_macro_f1 = f1_score(test_y_true, gcn_test_pred, average='macro', zero_division=0)
+
+    try:
+        gcn_auc = roc_auc_score(test_y_true, gcn_test_probs[:, 1])
+        gcn_macro_auc = gcn_auc
+    except:
+        gcn_auc = float('nan')
+        gcn_macro_auc = float('nan')
+
+    gcn_sensitivity = recall_score(test_y_true, gcn_test_pred, pos_label=1, zero_division=0)
+    gcn_specificity = recall_score(test_y_true, gcn_test_pred, pos_label=0, zero_division=0)
+    gcn_gmean = np.sqrt(gcn_sensitivity * gcn_specificity) if gcn_sensitivity * gcn_specificity > 0 else 0
+
+    gcn_results = {
+        'f1': gcn_f1, 'accuracy': gcn_accuracy, 'precision': gcn_precision,
+        'recall': gcn_recall, 'macro_recall': gcn_macro_recall, 'macro_f1': gcn_macro_f1,
+        'auc': gcn_auc, 'macro_auc': gcn_macro_auc, 'gmean': gcn_gmean
+    }
+
     # Evaluate final model
     print("\n5. Evaluating final ensemble model...")
 
@@ -1121,25 +1185,19 @@ def run_full_pipeline():
     test_y_true = data.y[data.test_mask].cpu().numpy()
     test_y_pred = final_ensemble.predict(data, device, test_only=True)
 
+    # Get ensemble probabilities for all metrics calculation
+    ensemble_probs = final_ensemble.predict_proba(data, device, test_only=True)
+
     # Debug: print shapes to verify
     print(f"test_y_true shape: {test_y_true.shape}")
     print(f"test_y_pred shape: {test_y_pred.shape}")
+    print(f"ensemble_probs shape: {ensemble_probs.shape}")
 
     # Ensure shapes match
     assert test_y_true.shape[0] == test_y_pred.shape[0], f"Shape mismatch: test_y_true {test_y_true.shape[0]}, test_y_pred {test_y_pred.shape[0]}"
+    assert test_y_true.shape[0] == ensemble_probs.shape[0], f"Shape mismatch: test_y_true {test_y_true.shape[0]}, ensemble_probs {ensemble_probs.shape[0]}"
 
-    # To calculate AUC, we need probability outputs from one of the models
-    representative_model = ensemble_models['GAT'].models[0]  # Use first sub-model
-    representative_model.eval()
-
-    with torch.no_grad():
-        out = representative_model(data)
-        all_probs = torch.exp(out).cpu().numpy()
-        # Get probabilities for test nodes only
-        test_mask_np = data.test_mask.cpu().numpy()
-        probs = all_probs[test_mask_np]
-
-    # Calculate all metrics
+    # Calculate all metrics using ensemble predictions and probabilities
     f1 = f1_score(test_y_true, test_y_pred, average='binary', pos_label=1, zero_division=0)
     accuracy = accuracy_score(test_y_true, test_y_pred)
     precision = precision_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
@@ -1147,15 +1205,15 @@ def run_full_pipeline():
     macro_recall = recall_score(test_y_true, test_y_pred, average='macro', zero_division=0)
     macro_f1 = f1_score(test_y_true, test_y_pred, average='macro', zero_division=0)
 
-    # AUC (using representative model's probabilities)
+    # AUC using integrated ensemble probabilities
     try:
-        auc = roc_auc_score(test_y_true, probs[:, 1])
+        auc = roc_auc_score(test_y_true, ensemble_probs[:, 1])
         macro_auc = auc
     except:
         auc = float('nan')
         macro_auc = float('nan')
 
-    # G-Mean
+    # G-Mean using ensemble predictions
     sensitivity = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
     specificity = recall_score(test_y_true, test_y_pred, pos_label=0, zero_division=0)
     gmean = np.sqrt(sensitivity * specificity) if sensitivity * specificity > 0 else 0
@@ -1176,43 +1234,84 @@ def run_full_pipeline():
     print("\nClassification Report:")
     print(classification_report(test_y_true, test_y_pred, target_names=['Legal', 'Illegal'], zero_division=0))
 
-    # Performance comparison with baseline
-    print("\n" + "="*60)
-    print("PERFORMANCE COMPARISON: GNN Ensemble vs Isolation Forest Baseline")
-    print("="*60)
+    # Performance comparison with both baselines
+    print("\n" + "="*80)
+    print("PERFORMANCE COMPARISON: Final Ensemble vs GCN Baseline vs IForest Baseline")
+    print("="*80)
 
     # Create comparison table
     metrics = ['F1 Score', 'Accuracy', 'Precision', 'Recall', 'Macro Recall', 'Macro F1', 'AUC', 'Macro AUC', 'G-Mean']
     ensemble_scores = [f1, accuracy, precision, recall, macro_recall, macro_f1, auc, macro_auc, gmean]
-    baseline_scores = [
-        baseline_results['f1'],
-        baseline_results['accuracy'],
-        baseline_results['precision'],
-        baseline_results['recall'],
-        baseline_results['macro_recall'],
-        baseline_results['macro_f1'],
-        baseline_results['auc'],
-        baseline_results['macro_auc'],
-        baseline_results['gmean']
+    gcn_scores = [
+        gcn_results['f1'], gcn_results['accuracy'], gcn_results['precision'],
+        gcn_results['recall'], gcn_results['macro_recall'], gcn_results['macro_f1'],
+        gcn_results['auc'], gcn_results['macro_auc'], gcn_results['gmean']
+    ]
+    iforest_scores = [
+        baseline_results['f1'], baseline_results['accuracy'], baseline_results['precision'],
+        baseline_results['recall'], baseline_results['macro_recall'], baseline_results['macro_f1'],
+        baseline_results['auc'], baseline_results['macro_auc'], baseline_results['gmean']
     ]
 
-    print("<15")
-    print("-" * 65)
+    print(f"{'Metric':<15} {'Final Ensemble':>14} {'GCN Baseline':>12} {'vs GCN':>10} {'IForest':>10} {'vs IForest':>11}")
+    print("-" * 90)
 
-    for metric, ensemble_score, baseline_score in zip(metrics, ensemble_scores, baseline_scores):
-        ensemble_str = ".4f" if not np.isnan(ensemble_score) else "N/A"
-        baseline_str = ".4f" if not np.isnan(baseline_score) else "N/A"
-
-        if not (np.isnan(ensemble_score) or np.isnan(baseline_score)):
-            improvement = ((ensemble_score - baseline_score) / baseline_score) * 100
-            improvement_str = "+.1f" if improvement > 0 else ".1f"
+    for metric, ensemble_score, gcn_score, iforest_score in zip(metrics, ensemble_scores, gcn_scores, iforest_scores):
+        # Format scores
+        if not np.isnan(ensemble_score):
+            ensemble_str = f"{ensemble_score:>14.4f}"
         else:
-            improvement_str = "N/A"
+            ensemble_str = f"{'N/A':>14}"
 
-        print("<15")
+        if not np.isnan(gcn_score):
+            gcn_str = f"{gcn_score:>12.4f}"
+        else:
+            gcn_str = f"{'N/A':>12}"
 
-    print("-" * 65)
-    print("<15")
+        if not np.isnan(iforest_score):
+            iforest_str = f"{iforest_score:>10.4f}"
+        else:
+            iforest_str = f"{'N/A':>10}"
+
+        # Calculate improvements
+        if not (np.isnan(ensemble_score) or np.isnan(gcn_score)):
+            gcn_improvement = ((ensemble_score - gcn_score) / gcn_score) * 100
+            gcn_imp_str = f"{gcn_improvement:+>9.1f}%"
+        else:
+            gcn_imp_str = f"{'N/A':>10}"
+
+        if not (np.isnan(ensemble_score) or np.isnan(iforest_score)):
+            iforest_improvement = ((ensemble_score - iforest_score) / iforest_score) * 100
+            iforest_imp_str = f"{iforest_improvement:+>10.1f}%"
+        else:
+            iforest_imp_str = f"{'N/A':>11}"
+
+        print(f"{metric:<15} {ensemble_str} {gcn_str} {gcn_imp_str} {iforest_str} {iforest_imp_str}")
+
+    print("-" * 90)
+
+    # Calculate average improvements
+    gcn_avg_improvement = np.nanmean([
+        ((e - g) / g) * 100 if not (np.isnan(e) or np.isnan(g)) else np.nan
+        for e, g in zip(ensemble_scores, gcn_scores)
+    ])
+
+    iforest_avg_improvement = np.nanmean([
+        ((e - i) / i) * 100 if not (np.isnan(e) or np.isnan(i)) else np.nan
+        for e, i in zip(ensemble_scores, iforest_scores)
+    ])
+
+    if not np.isnan(gcn_avg_improvement):
+        gcn_avg_str = f"{gcn_avg_improvement:+>9.1f}%"
+    else:
+        gcn_avg_str = f"{'N/A':>10}"
+
+    if not np.isnan(iforest_avg_improvement):
+        iforest_avg_str = f"{iforest_avg_improvement:+>10.1f}%"
+    else:
+        iforest_avg_str = f"{'N/A':>11}"
+
+    print(f"{'Average':<15} {'':>14} {'':>12} {gcn_avg_str} {'':>10} {iforest_avg_str}")
     print("\n" + "="*60)
 
     # Plot confusion matrix
@@ -1221,9 +1320,6 @@ def run_full_pipeline():
     plot_confusion_matrix(test_y_true, test_y_pred, model_name='Final Ensemble Model',
                          save_path='results/confusion_matrix.png')
 
-    # Model explanation
-    # print("\n7. Performing model explanation (GNNExplainer)...")
-    # explain_model(representative_model, data, device, num_samples=5, output_dir='results/explanations')
 
     print("\n" + "="*60)
     print("Complete pipeline execution finished!")
