@@ -1129,6 +1129,9 @@ def run_full_pipeline():
 
     final_ensemble = FinalEnsemble(ensemble_models)
 
+    # Define test labels for evaluation
+    test_y_true = data.y[data.test_mask].cpu().numpy()
+
     # Train standalone GCN baseline model
     print("\n4.5. Training standalone GCN baseline model...")
     gcn_model = GCNModel(
@@ -1182,7 +1185,6 @@ def run_full_pipeline():
     print("\n5. Evaluating final ensemble model...")
 
     # Use final ensemble model for prediction
-    test_y_true = data.y[data.test_mask].cpu().numpy()
     test_y_pred = final_ensemble.predict(data, device, test_only=True)
 
     # Get ensemble probabilities for all metrics calculation
