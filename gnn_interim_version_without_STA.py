@@ -2,7 +2,7 @@
 gnn_interim_version.py
 
 Advanced GNN framework version focused on blockchain anomaly detection
-Includes: GCN, GAT, GIN, GraphSAGE, STA (multi-hop neighbor information learning)
+Includes: GCN, GAT, GIN, GraphSAGE (multi-hop neighbor information learning)
 Ensemble + Bagging, Hyperopt (Bayesian Optimization), GNNExplainer
 Focal Loss for class imbalance, GAN-based data augmentation, PyTorch Geometric MLP
 Isolation Forest Baseline for performance comparison
@@ -222,105 +222,6 @@ class GINModel(BaseGNN):
             embed = features[-1] if features else data.x
             return out, embed
         return out
-
-
-# STA (Spatial-Temporal Attention) for multi-hop neighbor information using PyTorch Geometric Temporal
-# class SpatialTemporalAttention(nn.Module):
-#     def __init__(self, in_channels, hidden_channels, num_heads=8, dropout=0.5):
-#         super(SpatialTemporalAttention, self).__init__()
-#         self.in_channels = in_channels
-#         self.hidden_channels = hidden_channels
-#         self.num_heads = num_heads
-
-#         # Use PyTorch Geometric Temporal's SpatioTemporalAttention
-#         self.sta = SpatioTemporalAttention(
-#             in_channels=in_channels,
-#             out_channels=hidden_channels,
-#             num_nodes=None,  # Will be set dynamically
-#             num_heads=num_heads,
-#             dropout=dropout
-#         )
-
-#         self.dropout = nn.Dropout(dropout)
-#         self.layer_norm = nn.LayerNorm(hidden_channels)
-
-#     def forward(self, x, edge_index, timesteps=None):
-#         # PyTorch Geometric Temporal expects batch format
-#         # Convert to expected format: (batch_size, num_nodes, num_features, num_timesteps)
-#         batch_size = 1  # Single graph
-#         num_nodes, num_features = x.size()
-#         num_timesteps = 1 if timesteps is None else len(torch.unique(timesteps))
-
-#         # Create temporal dimension if not provided
-#         if timesteps is None:
-#             # Assume all nodes are from the same timestep
-#             x_expanded = x.unsqueeze(0).unsqueeze(-1)  # (1, num_nodes, num_features, 1)
-#         else:
-#             # Group nodes by timesteps
-#             unique_ts = torch.unique(timesteps)
-#             x_temporal = []
-#             for t in unique_ts:
-#                 mask_t = (timesteps == t)
-#                 x_t = x[mask_t].unsqueeze(0).unsqueeze(-1)  # (1, num_nodes_t, num_features, 1)
-#                 x_temporal.append(x_t)
-
-#             # Stack temporal sequences (simplified - assuming same number of nodes per timestep)
-#             if len(x_temporal) > 1:
-#                 try:
-#                     x_expanded = torch.cat(x_temporal, dim=-1)  # (1, num_nodes, num_features, num_timesteps)
-#                 except RuntimeError:
-#                     # If different number of nodes per timestep, use padding or take first timestep
-#                     x_expanded = x_temporal[0]  # Use first timestep only
-#             else:
-#                 x_expanded = x_temporal[0] if x_temporal else x.unsqueeze(0).unsqueeze(-1)
-
-#         # Apply spatio-temporal attention
-#         out = self.sta(x_expanded)  # Expected output: (batch_size, num_nodes, out_channels)
-
-#         # Remove batch and timestep dimensions
-#         out = out.squeeze(0).squeeze(-1) if out.dim() > 2 else out.squeeze(0)
-
-#         # Apply dropout and layer norm
-#         out = self.dropout(out)
-#         out = self.layer_norm(out)
-
-#         return out
-
-
-# class STAModel(BaseGNN):
-#     def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, num_layers=2, dropout=0.5):
-#         super(STAModel, self).__init__()
-#         self.sta = SpatialTemporalAttention(in_channels, hidden_channels, num_heads, dropout)
-#         self.gat_convs = nn.ModuleList()
-#         self.gat_convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
-#         for _ in range(num_layers - 2):
-#             self.gat_convs.append(GATConv(hidden_channels * num_heads, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
-#         if num_layers > 1:
-#             self.gat_convs.append(GATConv(hidden_channels * num_heads, hidden_channels, heads=1, dropout=dropout, concat=False))
-#         else:
-#             self.gat_convs.append(GATConv(in_channels, hidden_channels, heads=1, dropout=dropout, concat=False))
-#         self.fusion = nn.Sequential(nn.Linear(hidden_channels * 2, hidden_channels), nn.ReLU(), nn.Dropout(dropout), nn.Linear(hidden_channels, out_channels))
-#         self.dropout = dropout
-
-#     def forward(self, data, return_embed=False):
-#         x, edge_index = data.x, data.edge_index
-#         timesteps = getattr(data, 'timesteps', None)
-#         sta_out = self.sta(x, edge_index, timesteps)
-#         gat_x = x
-#         gat_feats = []
-#         for conv in self.gat_convs[:-1]:
-#             gat_x = conv(gat_x, edge_index)
-#             gat_x = F.elu(gat_x)
-#             gat_feats.append(gat_x.clone())
-#             gat_x = F.dropout(gat_x, p=self.dropout, training=self.training)
-#         gat_x = self.gat_convs[-1](gat_x, edge_index)
-#         combined = torch.cat([sta_out, gat_x], dim=1)
-#         out = self.fusion(combined)
-#         out = F.log_softmax(out, dim=1)
-#         if return_embed:
-#             embed = torch.cat([sta_out, gat_x], dim=1)
-#             return out, embed
-#         return out
 
 
 # -----------------------
@@ -1202,15 +1103,6 @@ def hyperopt_objective(params):
             num_layers=num_layers,
             dropout=dropout
         )
-    # elif model_name == 'STA':
-    #     model = STAModel(
-    #         in_channels=data.x.size(1),
-    #         hidden_channels=hidden_channels,
-    #         out_channels=2,
-    #         num_heads=num_heads,
-    #         num_layers=num_layers,
-    #         dropout=dropout
-    #     )
     else:  # GCN
         model = GCNModel(
             in_channels=data.x.size(1),
@@ -1281,7 +1173,7 @@ def run_full_pipeline():
 
     # Define search space with reasonable minimum values
     space = {
-        'model': hp.choice('model', ['GCN', 'GAT', 'GIN', 'GraphSAGE', 'STA']),
+        'model': hp.choice('model', ['GCN', 'GAT', 'GIN', 'GraphSAGE']),
         'hidden_channels': hp.choice('hidden_channels', [64, 128, 256]),  # Removed 32 to ensure sufficient capacity
         'dropout': hp.uniform('dropout', 0.1, 0.5),
         'num_layers': hp.choice('num_layers', [2, 3]),  # Limited to 2-3 layers to avoid dimension collapse
@@ -1335,7 +1227,7 @@ def run_full_pipeline():
 
     print(f"Using validated parameters: hidden_channels={best_hidden_channels}, num_layers={best_num_layers}, num_heads={best_num_heads}")
 
-    # Create BaggingEnsemble combining GAT, GIN, GraphSAGE, STA
+    # Create BaggingEnsemble combining GAT, GIN, GraphSAGE
     model_configs = {
         'GAT': {
             'in_channels': data.x.size(1),
@@ -1358,21 +1250,13 @@ def run_full_pipeline():
             'out_channels': 2,
             'num_layers': best_num_layers,
             'dropout': best['dropout']
-        },
-        'STA': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_heads': best_num_heads,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
         }
     }
 
     # Debug: Check data dimensions before training
     print(f"Data dimensions before ensemble training: {data.x.size(0)} nodes, {data.x.size(1)} features")
 
-    # Train four ensemble models (including STA)
+    # Train four ensemble models
     ensemble_models = {}
     for model_name, params in model_configs.items():
         print(f"\nTraining {model_name} Bagging Ensemble...")
@@ -1383,8 +1267,7 @@ def run_full_pipeline():
             model_class = GINModel
         elif model_name == 'GraphSAGE':
             model_class = GraphSAGEModel
-        # else:  # STA
-        #     model_class = STAModel
+
 
         ensemble = BaggingEnsembleModel(
             model_class=model_class,
@@ -1396,8 +1279,7 @@ def run_full_pipeline():
         ensemble.fit(data, device, epochs=100)
         ensemble_models[model_name] = ensemble
 
-    # Create final ensemble (combining four models including STA)
-    print("\n4. Creating final ensemble model (GAT + GIN + GraphSAGE + STA)...")
+    # Create final ensemble
     print("\n4. Creating final ensemble model (GAT + GIN + GraphSAGE)...")
 
     final_ensemble = FinalEnsemble(ensemble_models)
