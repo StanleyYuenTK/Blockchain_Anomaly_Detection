@@ -37,7 +37,7 @@ from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 import hyperopt
 
 # Visualization tools
-from visualization_tools import plot_confusion_matrix, plot_feature_visualization_2d, plot_training_curves, TrainingHistory
+from visualization_tools import plot_confusion_matrix, plot_feature_visualization_2d, plot_training_curves, TrainingHistory, plot_model_comparison
 
 # Additional visualization imports for explain_model
 import matplotlib.pyplot as plt
@@ -975,6 +975,48 @@ def hyperopt_objective(params):
 
 
 # -----------------------
+# Evaluation Functions
+# -----------------------
+
+def calculate_all_metrics(y_true, y_pred, y_probs):
+    """Calculate all 9 evaluation metrics"""
+    # Basic metrics
+    f1 = f1_score(y_true, y_pred, average='binary', pos_label=1, zero_division=0)
+    accuracy = accuracy_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred, pos_label=1, zero_division=0)
+    recall = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
+
+    # Macro metrics
+    macro_recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
+    macro_f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+
+    # AUC
+    try:
+        auc = roc_auc_score(y_true, y_probs[:, 1])
+        macro_auc = auc  # For binary classification, macro AUC equals regular AUC
+    except:
+        auc = float('nan')
+        macro_auc = float('nan')
+
+    # G-Mean
+    sensitivity = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
+    specificity = recall_score(y_true, y_pred, pos_label=0, zero_division=0)
+    gmean = np.sqrt(sensitivity * specificity) if sensitivity * specificity > 0 else 0
+
+    return {
+        'f1': f1,
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'macro_recall': macro_recall,
+        'macro_f1': macro_f1,
+        'auc': auc,
+        'macro_auc': macro_auc,
+        'gmean': gmean
+    }
+
+
+# -----------------------
 # Main Execution Function
 # -----------------------
 
@@ -1072,8 +1114,15 @@ def run_full_pipeline():
 
     print(f"Using validated parameters: hidden_channels={best_hidden_channels}, num_layers={best_num_layers}, num_heads={best_num_heads}")
 
-    # Create BaggingEnsemble combining GAT, GIN, GraphSAGE
+    # Create BaggingEnsemble combining GCN, GAT, GIN, GraphSAGE
     model_configs = {
+        'GCN': {
+            'in_channels': data.x.size(1),
+            'hidden_channels': best_hidden_channels,
+            'out_channels': 2,
+            'num_layers': best_num_layers,
+            'dropout': best['dropout']
+        },
         'GAT': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
@@ -1106,13 +1155,14 @@ def run_full_pipeline():
     for model_name, params in model_configs.items():
         print(f"\nTraining {model_name} Bagging Ensemble...")
         print(f"Model params: in_channels={params['in_channels']}, hidden_channels={params['hidden_channels']}")
-        if model_name == 'GAT':
+        if model_name == 'GCN':
+            model_class = GCNModel
+        elif model_name == 'GAT':
             model_class = GATModel
         elif model_name == 'GIN':
             model_class = GINModel
         elif model_name == 'GraphSAGE':
             model_class = GraphSAGEModel
-
 
         ensemble = BaggingEnsembleModel(
             model_class=model_class,
@@ -1125,63 +1175,90 @@ def run_full_pipeline():
         ensemble_models[model_name] = ensemble
 
     # Create final ensemble
-    print("\n4. Creating final ensemble model (GAT + GIN + GraphSAGE)...")
+    print("\n4. Creating final ensemble model (Bagging GCN + Bagging GAT + Bagging GIN + Bagging GraphSAGE)...")
 
     final_ensemble = FinalEnsemble(ensemble_models)
 
     # Define test labels for evaluation
     test_y_true = data.y[data.test_mask].cpu().numpy()
 
-    # Train standalone GCN baseline model
-    print("\n4.5. Training standalone GCN baseline model...")
-    gcn_model = GCNModel(
-        in_channels=data.x.size(1),
-        hidden_channels=best_hidden_channels,
-        out_channels=2,
-        num_layers=best_num_layers,
-        dropout=best_dropout
-    )
-    gcn_model = gcn_model.to(device)
-    gcn_optimizer = torch.optim.Adam(gcn_model.parameters(), lr=best['lr'])
-    gcn_criterion = FocalLoss(alpha=1, gamma=2)
-
-    gcn_trainer = Trainer(gcn_model, data, device, gcn_optimizer, gcn_criterion)
-    gcn_best_stats = gcn_trainer.fit(epochs=100)  # Train GCN baseline for more epochs
-
-    # Get GCN predictions and probabilities for test set
-    gcn_model.eval()
-    with torch.no_grad():
-        gcn_out = gcn_model(data)
-        gcn_probs = torch.exp(gcn_out).cpu().numpy()
-        gcn_test_probs = gcn_probs[data.test_mask.cpu().numpy()]
-        gcn_test_pred = np.argmax(gcn_test_probs, axis=1)
-
-    # Calculate GCN baseline metrics
-    gcn_f1 = f1_score(test_y_true, gcn_test_pred, average='binary', pos_label=1, zero_division=0)
-    gcn_accuracy = accuracy_score(test_y_true, gcn_test_pred)
-    gcn_precision = precision_score(test_y_true, gcn_test_pred, pos_label=1, zero_division=0)
-    gcn_recall = recall_score(test_y_true, gcn_test_pred, pos_label=1, zero_division=0)
-    gcn_macro_recall = recall_score(test_y_true, gcn_test_pred, average='macro', zero_division=0)
-    gcn_macro_f1 = f1_score(test_y_true, gcn_test_pred, average='macro', zero_division=0)
-
-    try:
-        gcn_auc = roc_auc_score(test_y_true, gcn_test_probs[:, 1])
-        gcn_macro_auc = gcn_auc
-    except:
-        gcn_auc = float('nan')
-        gcn_macro_auc = float('nan')
-
-    gcn_sensitivity = recall_score(test_y_true, gcn_test_pred, pos_label=1, zero_division=0)
-    gcn_specificity = recall_score(test_y_true, gcn_test_pred, pos_label=0, zero_division=0)
-    gcn_gmean = np.sqrt(gcn_sensitivity * gcn_specificity) if gcn_sensitivity * gcn_specificity > 0 else 0
-
-    gcn_results = {
-        'f1': gcn_f1, 'accuracy': gcn_accuracy, 'precision': gcn_precision,
-        'recall': gcn_recall, 'macro_recall': gcn_macro_recall, 'macro_f1': gcn_macro_f1,
-        'auc': gcn_auc, 'macro_auc': gcn_macro_auc, 'gmean': gcn_gmean
+    # Initialize results collector
+    results_collector = {
+        'IForest': baseline_results,
+        'GCN_Single': {},
+        'GAT_Single': {},
+        'GIN_Single': {},
+        'GraphSAGE_Single': {},
+        'Final_Ensemble': {}
     }
 
-    # Evaluate final model
+    # Train and evaluate individual models (without bagging)
+    print("\n3.5. Training individual models for baseline comparison...")
+    single_model_configs = {
+        'GCN': {
+            'in_channels': data.x.size(1),
+            'hidden_channels': best_hidden_channels,
+            'out_channels': 2,
+            'num_layers': best_num_layers,
+            'dropout': best['dropout']
+        },
+        'GAT': {
+            'in_channels': data.x.size(1),
+            'hidden_channels': best_hidden_channels,
+            'out_channels': 2,
+            'num_heads': best_num_heads,
+            'num_layers': best_num_layers,
+            'dropout': best['dropout']
+        },
+        'GIN': {
+            'in_channels': data.x.size(1),
+            'hidden_channels': best_hidden_channels,
+            'out_channels': 2,
+            'num_layers': best_num_layers,
+            'dropout': best['dropout']
+        },
+        'GraphSAGE': {
+            'in_channels': data.x.size(1),
+            'hidden_channels': best_hidden_channels,
+            'out_channels': 2,
+            'num_layers': best_num_layers,
+            'dropout': best['dropout']
+        }
+    }
+
+    for model_name, params in single_model_configs.items():
+        print(f"\nTraining single {model_name} model...")
+        if model_name == 'GCN':
+            model_class = GCNModel
+        elif model_name == 'GAT':
+            model_class = GATModel
+        elif model_name == 'GIN':
+            model_class = GINModel
+        elif model_name == 'GraphSAGE':
+            model_class = GraphSAGEModel
+
+        # Create and train single model
+        single_model = model_class(**params)
+        single_model = single_model.to(device)
+        optimizer = torch.optim.Adam(single_model.parameters(), lr=best['lr'])
+        criterion = FocalLoss(alpha=1, gamma=2)
+
+        trainer = Trainer(single_model, data, device, optimizer, criterion)
+        trainer.fit(epochs=100)
+
+        # Get predictions and probabilities
+        single_model.eval()
+        with torch.no_grad():
+            out = single_model(data)
+            probs = torch.exp(out).cpu().numpy()
+            test_probs = probs[data.test_mask.cpu().numpy()]
+            test_pred = np.argmax(test_probs, axis=1)
+
+        # Calculate all metrics
+        results_collector[f'{model_name}_Single'] = calculate_all_metrics(test_y_true, test_pred, test_probs)
+        print(f"{model_name} single model evaluation completed")
+
+    # Evaluate final ensemble model
     print("\n5. Evaluating final ensemble model...")
 
     # Use final ensemble model for prediction
@@ -1200,127 +1277,123 @@ def run_full_pipeline():
     assert test_y_true.shape[0] == ensemble_probs.shape[0], f"Shape mismatch: test_y_true {test_y_true.shape[0]}, ensemble_probs {ensemble_probs.shape[0]}"
 
     # Calculate all metrics using ensemble predictions and probabilities
-    f1 = f1_score(test_y_true, test_y_pred, average='binary', pos_label=1, zero_division=0)
-    accuracy = accuracy_score(test_y_true, test_y_pred)
-    precision = precision_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
-    recall = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
-    macro_recall = recall_score(test_y_true, test_y_pred, average='macro', zero_division=0)
-    macro_f1 = f1_score(test_y_true, test_y_pred, average='macro', zero_division=0)
-
-    # AUC using integrated ensemble probabilities
-    try:
-        auc = roc_auc_score(test_y_true, ensemble_probs[:, 1])
-        macro_auc = auc
-    except:
-        auc = float('nan')
-        macro_auc = float('nan')
-
-    # G-Mean using ensemble predictions
-    sensitivity = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
-    specificity = recall_score(test_y_true, test_y_pred, pos_label=0, zero_division=0)
-    gmean = np.sqrt(sensitivity * specificity) if sensitivity * specificity > 0 else 0
+    results_collector['Final_Ensemble'] = calculate_all_metrics(test_y_true, test_y_pred, ensemble_probs)
 
     print("\n" + "="*50)
     print("Final Ensemble Model Evaluation Results")
     print("="*50)
-    print(f"F1 Score: {f1:.4f}")
-    print(f"Accuracy: {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall: {recall:.4f}")
-    print(f"Macro Recall: {macro_recall:.4f}")
-    print(f"Macro F1: {macro_f1:.4f}")
-    print(f"AUC: {auc:.4f}")
-    print(f"Macro AUC: {macro_auc:.4f}")
-    print(f"G-Mean: {gmean:.4f}")
+    ensemble_results = results_collector['Final_Ensemble']
+    print(f"F1 Score: {ensemble_results['f1']:.4f}")
+    print(f"Accuracy: {ensemble_results['accuracy']:.4f}")
+    print(f"Precision: {ensemble_results['precision']:.4f}")
+    print(f"Recall: {ensemble_results['recall']:.4f}")
+    print(f"Macro Recall: {ensemble_results['macro_recall']:.4f}")
+    print(f"Macro F1: {ensemble_results['macro_f1']:.4f}")
+    print(f"AUC: {ensemble_results['auc']:.4f}")
+    print(f"Macro AUC: {ensemble_results['macro_auc']:.4f}")
+    print(f"G-Mean: {ensemble_results['gmean']:.4f}")
 
     print("\nClassification Report:")
     print(classification_report(test_y_true, test_y_pred, target_names=['Legal', 'Illegal'], zero_division=0))
 
-    # Performance comparison with both baselines
-    print("\n" + "="*80)
-    print("PERFORMANCE COMPARISON: Final Ensemble vs GCN Baseline vs IForest Baseline")
-    print("="*80)
+    # Comprehensive Performance Comparison Matrix
+    print("\n" + "="*120)
+    print("COMPREHENSIVE PERFORMANCE COMPARISON MATRIX")
+    print("="*120)
 
-    # Create comparison table
+    # Define models and metrics for comparison
+    models = ['IForest', 'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single', 'Final_Ensemble']
     metrics = ['F1 Score', 'Accuracy', 'Precision', 'Recall', 'Macro Recall', 'Macro F1', 'AUC', 'Macro AUC', 'G-Mean']
-    ensemble_scores = [f1, accuracy, precision, recall, macro_recall, macro_f1, auc, macro_auc, gmean]
-    gcn_scores = [
-        gcn_results['f1'], gcn_results['accuracy'], gcn_results['precision'],
-        gcn_results['recall'], gcn_results['macro_recall'], gcn_results['macro_f1'],
-        gcn_results['auc'], gcn_results['macro_auc'], gcn_results['gmean']
-    ]
-    iforest_scores = [
-        baseline_results['f1'], baseline_results['accuracy'], baseline_results['precision'],
-        baseline_results['recall'], baseline_results['macro_recall'], baseline_results['macro_f1'],
-        baseline_results['auc'], baseline_results['macro_auc'], baseline_results['gmean']
-    ]
+    metric_keys = ['f1', 'accuracy', 'precision', 'recall', 'macro_recall', 'macro_f1', 'auc', 'macro_auc', 'gmean']
 
-    print(f"{'Metric':<15} {'Final Ensemble':>14} {'GCN Baseline':>12} {'vs GCN':>10} {'IForest':>10} {'vs IForest':>11}")
-    print("-" * 90)
+    # Print header
+    header = f"{'Metric':<15}"
+    for model in models:
+        header += f" {model:>12}"
+    header += " Best Model"
+    print(header)
+    print("-" * (15 + 12*len(models) + 12))
 
-    for metric, ensemble_score, gcn_score, iforest_score in zip(metrics, ensemble_scores, gcn_scores, iforest_scores):
-        # Format scores
-        if not np.isnan(ensemble_score):
-            ensemble_str = f"{ensemble_score:>14.4f}"
+    # Print each metric row
+    for i, (metric_name, metric_key) in enumerate(zip(metrics, metric_keys)):
+        row = f"{metric_name:<15}"
+
+        # Find best score for this metric
+        scores = []
+        valid_scores = []
+        for model in models:
+            score = results_collector[model].get(metric_key, float('nan'))
+            scores.append(score)
+            if not np.isnan(score):
+                valid_scores.append(score)
+
+        best_score = max(valid_scores) if valid_scores else float('nan')
+
+        # Format each model's score
+        for score in scores:
+            if not np.isnan(score):
+                # Highlight if this is the best score
+                if score == best_score and len(valid_scores) > 1:
+                    row += f" \033[92m{score:>11.4f}*\033[0m"  # Green with asterisk
+                else:
+                    row += f" {score:>11.4f}"
+            else:
+                row += f" {'N/A':>11}"
+
+        # Add best model name
+        if not np.isnan(best_score):
+            best_models = [model for model, score in zip(models, scores) if score == best_score]
+            best_model_str = best_models[0] if len(best_models) == 1 else f"{len(best_models)} models"
+            row += f" {best_model_str}"
         else:
-            ensemble_str = f"{'N/A':>14}"
+            row += " N/A"
 
-        if not np.isnan(gcn_score):
-            gcn_str = f"{gcn_score:>12.4f}"
-        else:
-            gcn_str = f"{'N/A':>12}"
+        print(row)
 
-        if not np.isnan(iforest_score):
-            iforest_str = f"{iforest_score:>10.4f}"
-        else:
-            iforest_str = f"{'N/A':>10}"
+    print("-" * (15 + 12*len(models) + 12))
 
-        # Calculate improvements
-        if not (np.isnan(ensemble_score) or np.isnan(gcn_score)):
-            gcn_improvement = ((ensemble_score - gcn_score) / gcn_score) * 100
-            gcn_imp_str = f"{gcn_improvement:+>9.1f}%"
-        else:
-            gcn_imp_str = f"{'N/A':>10}"
+    # Calculate and display improvements over baselines
+    print("\n" + "="*100)
+    print("IMPROVEMENT ANALYSIS")
+    print("="*100)
 
-        if not (np.isnan(ensemble_score) or np.isnan(iforest_score)):
-            iforest_improvement = ((ensemble_score - iforest_score) / iforest_score) * 100
-            iforest_imp_str = f"{iforest_improvement:+>10.1f}%"
-        else:
-            iforest_imp_str = f"{'N/A':>11}"
+    baseline_models = ['IForest']
+    target_models = ['Final_Ensemble']
 
-        print(f"{metric:<15} {ensemble_str} {gcn_str} {gcn_imp_str} {iforest_str} {iforest_imp_str}")
+    for baseline in baseline_models:
+        for target in target_models:
+            print(f"\n{baseline} vs {target} Improvement:")
+            improvements = []
+            for metric_key in metric_keys:
+                baseline_score = results_collector[baseline].get(metric_key, float('nan'))
+                target_score = results_collector[target].get(metric_key, float('nan'))
 
-    print("-" * 90)
+                if not (np.isnan(baseline_score) or np.isnan(target_score) or baseline_score == 0):
+                    improvement = ((target_score - baseline_score) / baseline_score) * 100
+                    improvements.append(improvement)
+                    print(f"  {metric_keys.index(metric_key):<2}. {metrics[metric_keys.index(metric_key)]:<15}: {improvement:+6.1f}%")
+                else:
+                    print(f"  {metric_keys.index(metric_key):<2}. {metrics[metric_keys.index(metric_key)]:<15}: N/A")
 
-    # Calculate average improvements
-    gcn_avg_improvement = np.nanmean([
-        ((e - g) / g) * 100 if not (np.isnan(e) or np.isnan(g)) else np.nan
-        for e, g in zip(ensemble_scores, gcn_scores)
-    ])
+            if improvements:
+                avg_improvement = np.mean(improvements)
+                print(f"  Average Improvement: {avg_improvement:+6.1f}%")
+                print("="*60)
 
-    iforest_avg_improvement = np.nanmean([
-        ((e - i) / i) * 100 if not (np.isnan(e) or np.isnan(i)) else np.nan
-        for e, i in zip(ensemble_scores, iforest_scores)
-    ])
-
-    if not np.isnan(gcn_avg_improvement):
-        gcn_avg_str = f"{gcn_avg_improvement:+>9.1f}%"
-    else:
-        gcn_avg_str = f"{'N/A':>10}"
-
-    if not np.isnan(iforest_avg_improvement):
-        iforest_avg_str = f"{iforest_avg_improvement:+>10.1f}%"
-    else:
-        iforest_avg_str = f"{'N/A':>11}"
-
-    print(f"{'Average':<15} {'':>14} {'':>12} {gcn_avg_str} {'':>10} {iforest_avg_str}")
-    print("\n" + "="*60)
-
-    # Plot confusion matrix
+    # Generate visualizations
     print("\n6. Generating visualizations...")
     os.makedirs('results', exist_ok=True)
+
+    # Plot confusion matrix
     plot_confusion_matrix(test_y_true, test_y_pred, model_name='Final Ensemble Model',
                          save_path='results/confusion_matrix.png')
+
+    # Plot model performance comparison
+    ensemble_metrics = results_collector['Final_Ensemble']
+    gcn_single_metrics = results_collector['GCN_Single']
+
+    plot_model_comparison(ensemble_metrics, gcn_single_metrics, baseline_results,
+                         save_path='results/model_performance_comparison.png')
 
 
     print("\n" + "="*60)
