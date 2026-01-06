@@ -1536,9 +1536,9 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
     model_labels = ['Final Ensemble', 'GCN Bagging', 'GAT Bagging', 'GIN Bagging', 'GraphSAGE Bagging',
                     'GCN Single', 'GAT Single', 'GIN Single', 'GraphSAGE Single', 'Isolation Forest']
 
-    # Define metrics to plot
-    metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
-    metric_labels = ['Accuracy', 'Precision', 'Recall', 'F1-score', 'ROC-AUC']
+    # Define metrics to plot (all 9 metrics from calculate_all_metrics)
+    metrics = ['accuracy', 'precision', 'recall', 'f1', 'macro_recall', 'macro_f1', 'auc', 'macro_auc', 'gmean']
+    metric_labels = ['Accuracy', 'Precision', 'Recall', 'F1-score', 'Macro Recall', 'Macro F1', 'ROC-AUC', 'Macro AUC', 'G-Mean']
 
     # Color palette for 10 models
     colors = ['#2E86AB', '#A23B72', '#27AE60', '#E67E22', '#9B59B6', '#F24236', '#F5A623',
