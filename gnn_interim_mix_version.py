@@ -1,8 +1,8 @@
 """
-gnn_interim_version.py
+gnn_interim_mix_version.py
 
-Advanced GNN framework version focused on blockchain anomaly detection
-Includes: GCN, GAT, GIN, GraphSAGE (multi-hop neighbor information learning)
+Enhanced GNN framework version with MixHopConv for multi-hop learning
+Includes: MixHopConv + GCN, MixHopConv + GAT, MixHopConv + GIN, MixHopConv + GraphSAGE
 Ensemble + Bagging, Hyperopt (Bayesian Optimization)
 Focal Loss for class imbalance, GAN-based data augmentation, PyTorch Geometric MLP
 Isolation Forest Baseline for performance comparison
@@ -23,7 +23,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, MLP
+from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, MLP, MixHopConv
+# try:
+#     from torch_geometric.nn import MixHopConv
+#     MIXHOP_AVAILABLE = True
+#     print("MixHopConv is available")
+# except ImportError:
+#     MIXHOP_AVAILABLE = False
+#     print("MixHopConv is not available in current PyTorch Geometric version")
 
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -84,7 +91,7 @@ class FocalLoss(nn.Module):
             return focal_loss
 
 # -----------------------
-# Model definitions
+# Model definitions with MixHopConv enhancement
 # -----------------------
 
 class BaseGNN(nn.Module):
@@ -93,132 +100,127 @@ class BaseGNN(nn.Module):
         raise NotImplementedError
 
 
-class GCNModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=2, dropout=0.5):
-        super(GCNModel, self).__init__()
-        self.num_layers = num_layers
-        self.hidden_channels = hidden_channels
-        self.convs = nn.ModuleList()
-        self.convs.append(GCNConv(in_channels, hidden_channels))
-        for _ in range(num_layers - 2):
-            self.convs.append(GCNConv(hidden_channels, hidden_channels))
-        if num_layers > 1:
-            self.convs.append(GCNConv(hidden_channels, out_channels))
-        else:                                                     ## 做多咗？
-            self.convs.append(GCNConv(in_channels, out_channels)) ## 做多咗？
+class MixHopGCNModel(BaseGNN):
+    """GCN with MixHopConv enhancement: MixHopConv + GCN + MixHopConv"""
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
+        super(MixHopGCNModel, self).__init__()
+        # MixHopConv for multi-hop neighborhood aggregation
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1, 2, 3], dropout=dropout)
+        # GCN for feature learning
+        self.gcn = GCNConv(hidden_channels, hidden_channels)
+        # Final MixHopConv for output refinement
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1, 2], dropout=dropout)
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
-        features = []
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            features.append(x.clone())
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
+
+        # Stage 1: Multi-hop neighborhood learning
+        x = self.mixhop1(x, edge_index)
+        x = F.relu(x)
+
+        # Stage 2: GCN feature learning
+        x = self.gcn(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        # Stage 3: Final multi-hop integration
+        x = self.mixhop2(x, edge_index)
+
         out = F.log_softmax(x, dim=1)
-        if return_embed:
-            # Return the last hidden representation (if no hidden layers, return input)
-            embed = features[-1] if features else data.x
-            return out, embed
         return out
 
 
-class GATModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, num_layers=2, dropout=0.5):
-        super(GATModel, self).__init__()
-        self.num_layers = num_layers
-        self.num_heads = num_heads
-        self.convs = nn.ModuleList()
-        self.convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
-        for _ in range(num_layers - 2):
-            self.convs.append(GATConv(hidden_channels * num_heads, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
-        if num_layers > 1:
-            self.convs.append(GATConv(hidden_channels * num_heads, out_channels, heads=1, dropout=dropout, concat=False))
-        else:
-            self.convs.append(GATConv(in_channels, out_channels, heads=1, dropout=dropout, concat=False))
+class MixHopGATModel(BaseGNN):
+    """GAT with MixHopConv enhancement: MixHopConv + GAT + MixHopConv"""
+    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, dropout=0.5):
+        super(MixHopGATModel, self).__init__()
+        # MixHopConv for multi-hop neighborhood aggregation
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1, 2, 3], dropout=dropout)
+        # GAT for attention-based feature learning
+        self.gat = GATConv(hidden_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True)
+        # Final MixHopConv for output refinement
+        self.mixhop2 = MixHopConv(hidden_channels * num_heads, out_channels, powers=[1, 2], dropout=dropout)
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
-        features = []
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            features.append(x.clone())
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
+
+        # Stage 1: Multi-hop neighborhood learning
+        x = self.mixhop1(x, edge_index)
+        x = F.relu(x)
+
+        # Stage 2: GAT attention learning
+        x = self.gat(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        # Stage 3: Final multi-hop integration
+        x = self.mixhop2(x, edge_index)
+
         out = F.log_softmax(x, dim=1)
-        if return_embed:
-            embed = features[-1] if features else data.x
-            return out, embed
         return out
 
 
-class GraphSAGEModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=2, dropout=0.5, aggr='mean'):
-        super(GraphSAGEModel, self).__init__()
-        self.num_layers = num_layers
-        self.convs = nn.ModuleList()
-        self.convs.append(SAGEConv(in_channels, hidden_channels, aggr=aggr))
-        for _ in range(num_layers - 2):
-            self.convs.append(SAGEConv(hidden_channels, hidden_channels, aggr=aggr))
-        if num_layers > 1:
-            self.convs.append(SAGEConv(hidden_channels, out_channels, aggr=aggr))
-        else:
-            self.convs.append(SAGEConv(in_channels, out_channels, aggr=aggr))
+class MixHopGINModel(BaseGNN):
+    """GIN with MixHopConv enhancement: MixHopConv + GIN + MixHopConv"""
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
+        super(MixHopGINModel, self).__init__()
+        # MixHopConv for multi-hop neighborhood aggregation
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1, 2, 3], dropout=dropout)
+        # GIN for graph isomorphism learning
+        self.gin = GINConv(MLP([hidden_channels, hidden_channels, hidden_channels], dropout=dropout))
+        # Final MixHopConv for output refinement
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1, 2], dropout=dropout)
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
-        features = []
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            features.append(x.clone())
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
+
+        # Stage 1: Multi-hop neighborhood learning
+        x = self.mixhop1(x, edge_index)
+        x = F.relu(x)
+
+        # Stage 2: GIN isomorphism learning
+        x = self.gin(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        # Stage 3: Final multi-hop integration
+        x = self.mixhop2(x, edge_index)
+
         out = F.log_softmax(x, dim=1)
-        if return_embed:
-            embed = features[-1] if features else data.x
-            return out, embed
         return out
 
 
-class GINModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=2, dropout=0.5):
-        super(GINModel, self).__init__()
-        self.num_layers = num_layers
-        self.convs = nn.ModuleList()
-
-        # Use torch_geometric.nn.MLP for GINConv
-        mlp_channels = [in_channels, hidden_channels, hidden_channels]
-        self.convs.append(GINConv(MLP(mlp_channels, dropout=dropout)))
-        for _ in range(num_layers - 2):
-            mlp_channels = [hidden_channels, hidden_channels, hidden_channels]
-            self.convs.append(GINConv(MLP(mlp_channels, dropout=dropout)))
-        if num_layers > 1:
-            mlp_channels = [hidden_channels, hidden_channels, out_channels]
-            self.convs.append(GINConv(MLP(mlp_channels, dropout=dropout)))
-        else:
-            mlp_channels = [in_channels, hidden_channels, out_channels]
-            self.convs.append(GINConv(MLP(mlp_channels, dropout=dropout)))
+class MixHopGraphSAGEModel(BaseGNN):
+    """GraphSAGE with MixHopConv enhancement: MixHopConv + GraphSAGE + MixHopConv"""
+    def __init__(self, in_channels, hidden_channels, out_channels, aggr='mean', dropout=0.5):
+        super(MixHopGraphSAGEModel, self).__init__()
+        # MixHopConv for multi-hop neighborhood aggregation
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1, 2, 3], dropout=dropout)
+        # GraphSAGE for neighborhood sampling and aggregation
+        self.sage = SAGEConv(hidden_channels, hidden_channels, aggr=aggr)
+        # Final MixHopConv for output refinement
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1, 2], dropout=dropout)
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
-        features = []
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            features.append(x.clone())
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
+
+        # Stage 1: Multi-hop neighborhood learning
+        x = self.mixhop1(x, edge_index)
+        x = F.relu(x)
+
+        # Stage 2: GraphSAGE neighborhood sampling
+        x = self.sage(x, edge_index)
+        x = F.relu(x)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+
+        # Stage 3: Final multi-hop integration
+        x = self.mixhop2(x, edge_index)
+
         out = F.log_softmax(x, dim=1)
-        if return_embed:
-            embed = features[-1] if features else data.x
-            return out, embed
         return out
 
 
@@ -396,7 +398,7 @@ class IsolationForestBaseline:
             contamination_ratio = np.mean(y_train == 1)
             # Cap at 0.5 as required by sklearn's IsolationForest (must be <= 0.5)
             self.contamination = min(max(contamination_ratio, 0.01), 0.5)  # Min 1%, Max 50%
-            
+
 
         # Initialize and train Isolation Forest
         self.model = IsolationForest(
@@ -480,25 +482,18 @@ class IsolationForestBaseline:
 # -----------------------
 
 def load_elliptic_data(dataset_dir='../Dataset'):
-
+    # print(f"Current working directory: {os.getcwd()}")  # Debug: Current working directory
+    # print(f"Loading data from: {dataset_dir}")  # Debug: Dataset directory
     classes_path = os.path.join(dataset_dir, 'elliptic_txs_classes.csv')
     edgelist_path = os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv')
     features_path = os.path.join(dataset_dir, 'elliptic_txs_features.csv')
 
-    # if not all(os.path.exists(p) for p in [classes_path, edgelist_path, features_path]):
-    #     print("Dataset files not found in standard location. Searching other locations...")
-    #     # Try to find dataset files in current directory or subdirectories
-    #     current_dir = os.getcwd()
-    #     for root, dirs, files in os.walk(current_dir):
-    #         if 'elliptic_txs_classes.csv' in files and 'elliptic_txs_edgelist.csv' in files and 'elliptic_txs_features.csv' in files:
-    #             dataset_dir = root
-    #             print(f"Found dataset files in: {dataset_dir}")
-    #             classes_path = os.path.join(dataset_dir, 'elliptic_txs_classes.csv')
-    #             edgelist_path = os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv')
-    #             features_path = os.path.join(dataset_dir, 'elliptic_txs_features.csv')
-    #             break
-    #     else:
-    #         raise FileNotFoundError("Dataset files not found. Please ensure elliptic_txs_classes.csv, elliptic_txs_edgelist.csv, and elliptic_txs_features.csv are available.")
+    # print(f"Full paths:")  # Debug: File paths
+    # print(f"  classes: {classes_path}")
+    # print(f"  edgelist: {edgelist_path}")
+    # print(f"  features: {features_path}")
+    # print(f"Files found: classes={os.path.exists(classes_path)}, edgelist={os.path.exists(edgelist_path)}, features={os.path.exists(features_path)}")  # Debug: File existence check
+
     classes_df = pd.read_csv(classes_path)
     edgelist_df = pd.read_csv(edgelist_path)
     features_df = pd.read_csv(features_path, header=None)
@@ -713,7 +708,7 @@ class Trainer:
             'test_gmean': test_gmean
         }
 
-    def fit(self, epochs=100, reduction_method='pca'): #extract_features_after=False, 
+    def fit(self, epochs=100, reduction_method='pca'): #extract_features_after=False,
         best_val_loss = float('inf')
         best_stats = None
 
@@ -865,7 +860,6 @@ def perform_feature_extraction_and_reduction(model, data, device, reduction_meth
     return extracted, reduced
 
 
-
 # -----------------------
 # Hyperopt Objective Function
 # -----------------------
@@ -891,39 +885,71 @@ def hyperopt_objective(params):
     dropout = params['dropout']
     num_heads = params['num_heads']
 
-    if model_name == 'GAT':
-        model = GATModel(
-            in_channels=data.x.size(1),
-            hidden_channels=hidden_channels,
-            out_channels=2,
-            num_heads=num_heads,
-            num_layers=num_layers,
-            dropout=dropout
-        )
-    elif model_name == 'GIN':
-        model = GINModel(
-            in_channels=data.x.size(1),
-            hidden_channels=hidden_channels,
-            out_channels=2,
-            num_layers=num_layers,
-            dropout=dropout
-        )
-    elif model_name == 'GraphSAGE':
-        model = GraphSAGEModel(
-            in_channels=data.x.size(1),
-            hidden_channels=hidden_channels,
-            out_channels=2,
-            num_layers=num_layers,
-            dropout=dropout
-        )
-    else:  # GCN
-        model = GCNModel(
-            in_channels=data.x.size(1),
-            hidden_channels=hidden_channels,
-            out_channels=2,
-            num_layers=num_layers,
-            dropout=dropout
-        )
+    if MIXHOP_AVAILABLE:
+        if model_name == 'GAT':
+            model = MixHopGATModel(
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                num_heads=num_heads,
+                dropout=dropout
+            )
+        elif model_name == 'GIN':
+            model = MixHopGINModel(
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                dropout=dropout
+            )
+        elif model_name == 'GraphSAGE':
+            model = MixHopGraphSAGEModel(
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                dropout=dropout
+            )
+        else:  # GCN
+            model = MixHopGCNModel(
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                dropout=dropout
+            )
+    else:
+        # Fallback to original models if MixHopConv not available
+        if model_name == 'GAT':
+            model = GATModel(
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                num_heads=num_heads,
+                num_layers=num_layers,
+                dropout=dropout
+            )
+        elif model_name == 'GIN':
+            model = GINModel(
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                num_layers=num_layers,
+                dropout=dropout
+            )
+        elif model_name == 'GraphSAGE':
+            model = GraphSAGEModel(
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                num_layers=num_layers,
+                dropout=dropout
+            )
+        else:  # GCN
+            model = GCNModel(
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                num_layers=num_layers,
+                dropout=dropout
+            )
 
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
@@ -992,10 +1018,15 @@ def calculate_all_metrics(y_true, y_pred, y_probs):
 # -----------------------
 
 def run_full_pipeline():
-    """Execute complete GNN anomaly detection pipeline"""
-    print("=" * 60)
-    print("Blockchain Anomaly Detection GNN Framework - Complete Pipeline")
-    print("=" * 60)
+    """Execute complete GNN anomaly detection pipeline with MixHopConv enhancement"""
+    print("=" * 70)
+    print("Blockchain Anomaly Detection GNN Framework - MixHopConv Enhanced")
+    print("=" * 70)
+
+    # Check MixHopConv availability
+    if not MIXHOP_AVAILABLE:
+        print("WARNING: MixHopConv is not available. Falling back to original GNN models.")
+        print("To use MixHopConv-enhanced models, please upgrade PyTorch Geometric.")
 
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1103,22 +1134,22 @@ def run_full_pipeline():
     print(f"Final model config: {best_hidden_channels} hidden, {best_num_layers} layers, {best_num_heads} heads")
 
     # ========================================================================
-    # 5. Train individual GNN models (single models)
+    # 5. Train individual MixHopConv-enhanced GNN models
     # ========================================================================
-    print("\n5. Training individual GNN models...")
+    print("\n5. Training individual MixHopConv-enhanced GNN models...")
 
     # Initialize results collector and training histories
     results_collector = {
         'IForest': baseline_results,
-        'GCN_Single': {},
-        'GAT_Single': {},
-        'GIN_Single': {},
-        'GraphSAGE_Single': {},
-        'GCN_Bagging': {},
-        'GAT_Bagging': {},
-        'GIN_Bagging': {},
-        'GraphSAGE_Bagging': {},
-        'Final_Ensemble': {}
+        'MixHop_GCN_Single': {},
+        'MixHop_GAT_Single': {},
+        'MixHop_GIN_Single': {},
+        'MixHop_GraphSAGE_Single': {},
+        'MixHop_GCN_Bagging': {},
+        'MixHop_GAT_Bagging': {},
+        'MixHop_GIN_Bagging': {},
+        'MixHop_GraphSAGE_Bagging': {},
+        'MixHop_Final_Ensemble': {}
     }
 
     training_histories = {}  # Store training histories for visualization
@@ -1132,47 +1163,43 @@ def run_full_pipeline():
     best_num_heads = min(max(best_num_heads, 4), 16)
 
     single_model_configs = {
-        'GCN': {
+        'MixHop_GCN': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
             'out_channels': 2,
-            'num_layers': best_num_layers,
             'dropout': best['dropout']
         },
-        'GAT': {
+        'MixHop_GAT': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
             'out_channels': 2,
             'num_heads': best_num_heads,
-            'num_layers': best_num_layers,
             'dropout': best['dropout']
         },
-        'GIN': {
+        'MixHop_GIN': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
             'out_channels': 2,
-            'num_layers': best_num_layers,
             'dropout': best['dropout']
         },
-        'GraphSAGE': {
+        'MixHop_GraphSAGE': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
             'out_channels': 2,
-            'num_layers': best_num_layers,
             'dropout': best['dropout']
         }
     }
 
     for model_name, params in single_model_configs.items():
         print(f"\nTraining single {model_name} model...")
-        if model_name == 'GCN':
-            model_class = GCNModel
-        elif model_name == 'GAT':
-            model_class = GATModel
-        elif model_name == 'GIN':
-            model_class = GINModel
-        elif model_name == 'GraphSAGE':
-            model_class = GraphSAGEModel
+        if 'GCN' in model_name:
+            model_class = MixHopGCNModel if MIXHOP_AVAILABLE else GCNModel
+        elif 'GAT' in model_name:
+            model_class = MixHopGATModel if MIXHOP_AVAILABLE else GATModel
+        elif 'GIN' in model_name:
+            model_class = MixHopGINModel if MIXHOP_AVAILABLE else GINModel
+        elif 'GraphSAGE' in model_name:
+            model_class = MixHopGraphSAGEModel if MIXHOP_AVAILABLE else GraphSAGEModel
 
         # Create and train single model
         single_model = model_class(**params)
@@ -1199,39 +1226,35 @@ def run_full_pipeline():
         print(f"{model_name} single model evaluation completed")
 
     # ========================================================================
-    # 6. Train bagging GNN models
+    # 6. Train bagging MixHopConv-enhanced GNN models
     # ========================================================================
-    print("\n6. Training bagging GNN models...")
+    print("\n6. Training bagging MixHopConv-enhanced GNN models...")
 
-    # Create BaggingEnsemble combining GCN, GAT, GIN, GraphSAGE
+    # Create BaggingEnsemble combining MixHopConv-enhanced GCN, GAT, GIN, GraphSAGE
     bagging_model_configs = {
-        'GCN': {
+        'MixHop_GCN': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
             'out_channels': 2,
-            'num_layers': best_num_layers,
             'dropout': best['dropout']
         },
-        'GAT': {
+        'MixHop_GAT': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
             'out_channels': 2,
             'num_heads': best_num_heads,
-            'num_layers': best_num_layers,
             'dropout': best['dropout']
         },
-        'GIN': {
+        'MixHop_GIN': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
             'out_channels': 2,
-            'num_layers': best_num_layers,
             'dropout': best['dropout']
         },
-        'GraphSAGE': {
+        'MixHop_GraphSAGE': {
             'in_channels': data.x.size(1),
             'hidden_channels': best_hidden_channels,
             'out_channels': 2,
-            'num_layers': best_num_layers,
             'dropout': best['dropout']
         }
     }
@@ -1241,14 +1264,14 @@ def run_full_pipeline():
     for model_name, params in bagging_model_configs.items():
         print(f"\nTraining {model_name} Bagging Ensemble...")
 
-        if model_name == 'GCN':
-            model_class = GCNModel
-        elif model_name == 'GAT':
-            model_class = GATModel
-        elif model_name == 'GIN':
-            model_class = GINModel
-        elif model_name == 'GraphSAGE':
-            model_class = GraphSAGEModel
+        if 'GCN' in model_name:
+            model_class = MixHopGCNModel if MIXHOP_AVAILABLE else GCNModel
+        elif 'GAT' in model_name:
+            model_class = MixHopGATModel if MIXHOP_AVAILABLE else GATModel
+        elif 'GIN' in model_name:
+            model_class = MixHopGINModel if MIXHOP_AVAILABLE else GINModel
+        elif 'GraphSAGE' in model_name:
+            model_class = MixHopGraphSAGEModel if MIXHOP_AVAILABLE else GraphSAGEModel
 
         ensemble = BaggingModel(
             model_class=model_class,
@@ -1277,9 +1300,9 @@ def run_full_pipeline():
         results_collector[f'{model_name}_Bagging'] = calculate_all_metrics(test_y_true, bagging_pred_test, bagging_probs_test)
 
     # ========================================================================
-    # 7. Create and evaluate final ensemble model
+    # 7. Create and evaluate MixHopConv-enhanced final ensemble model
     # ========================================================================
-    print("\n7. Creating and evaluating final ensemble model...")
+    print("\n7. Creating and evaluating MixHopConv-enhanced final ensemble model...")
 
     final_ensemble = FinalEnsemble(ensemble_models)
 
@@ -1294,13 +1317,13 @@ def run_full_pipeline():
     assert test_y_true.shape[0] == ensemble_probs.shape[0], f"Shape mismatch: test_y_true {test_y_true.shape[0]}, ensemble_probs {ensemble_probs.shape[0]}"
 
     # Calculate all metrics using ensemble predictions and probabilities
-    results_collector['Final_Ensemble'] = calculate_all_metrics(test_y_true, test_y_pred, ensemble_probs)
+    results_collector['MixHop_Final_Ensemble'] = calculate_all_metrics(test_y_true, test_y_pred, ensemble_probs)
 
     # Display final ensemble results
     print("\n" + "="*50)
-    print("Final Ensemble Model Evaluation Results")
+    print("MixHopConv-Enhanced Final Ensemble Model Evaluation Results")
     print("="*50)
-    ensemble_results = results_collector['Final_Ensemble']
+    ensemble_results = results_collector['MixHop_Final_Ensemble']
     print(f"F1 Score: {ensemble_results['f1']:.4f}")
     print(f"Accuracy: {ensemble_results['accuracy']:.4f}")
     print(f"Precision: {ensemble_results['precision']:.4f}")
@@ -1322,21 +1345,28 @@ def run_full_pipeline():
     os.makedirs('results', exist_ok=True)
 
     # Plot confusion matrix
-    plot_confusion_matrix(test_y_true, test_y_pred, model_name='Final Ensemble Model',
-                         save_path='results/confusion_matrix.png')
+    plot_confusion_matrix(test_y_true, test_y_pred, model_name='MixHopConv Final Ensemble Model',
+                         save_path='results/mixhop_confusion_matrix.png')
 
     # Plot individual metric charts
     print("Generating individual metric comparison charts...")
     from visualization_tools import plot_individual_metrics
-    plot_individual_metrics(results_collector, save_dir='results/metrics')
+
+    # Update the model list for MixHopConv models
+    mixhop_results_collector = {}
+    for key, value in results_collector.items():
+        if key in ['IForest', 'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single', 'MixHop_GCN_Bagging', 'MixHop_GAT_Bagging', 'MixHop_GIN_Bagging', 'MixHop_GraphSAGE_Bagging', 'MixHop_Final_Ensemble']:
+            mixhop_results_collector[key] = value
+
+    plot_individual_metrics(mixhop_results_collector, save_dir='results/mixhop_metrics')
 
     # Plot training curves for models (showing fitting process)
     print("Generating training curves...")
     import matplotlib.pyplot as plt
 
-    # Use real training data from GCN_Single model (as representative example)
-    if 'GCN_Single' in training_histories:
-        history = training_histories['GCN_Single']
+    # Use real training data from MixHop_GCN_Single model (as representative example)
+    if 'MixHop_GCN_Single' in training_histories:
+        history = training_histories['MixHop_GCN_Single']
 
         epochs = history.history['epoch']
         train_losses = history.history['train_loss']
@@ -1345,7 +1375,7 @@ def run_full_pipeline():
         test_f1_scores = history.history['test_f1']
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        fig.suptitle('GCN Model Training Process', fontsize=16, fontweight='bold')
+        fig.suptitle('MixHopConv GCN Model Training Process', fontsize=16, fontweight='bold')
 
         # Loss curves
         ax1.plot(epochs, train_losses, label='Training Loss', linewidth=2, color='#e74c3c', alpha=0.8)
@@ -1366,18 +1396,18 @@ def run_full_pipeline():
         ax2.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        plt.savefig('results/training_curves.png', dpi=300, bbox_inches='tight')
+        plt.savefig('results/mixhop_training_curves.png', dpi=300, bbox_inches='tight')
         plt.close()
 
-        print("Training curves saved to: results/training_curves.png")
+        print("Training curves saved to: results/mixhop_training_curves.png")
     else:
         print("Warning: No training history available for visualization")
 
 
-    print("\n" + "="*60)
-    print("Complete pipeline execution finished!")
+    print("\n" + "="*70)
+    print("Complete MixHopConv-enhanced pipeline execution finished!")
     print("Results saved to results/ directory")
-    print("="*60)
+    print("="*70)
 
 
 if __name__ == "__main__":
