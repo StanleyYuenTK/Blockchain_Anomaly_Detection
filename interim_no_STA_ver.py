@@ -1022,7 +1022,7 @@ def run_full_pipeline():
         objective_with_data,
         space=space,
         algo=tpe.suggest,
-        max_evals=8,  # 30 evaluations
+        max_evals=1,  # 30 evaluations
         trials=trials,
         rstate=np.random.default_rng(42)
     )
