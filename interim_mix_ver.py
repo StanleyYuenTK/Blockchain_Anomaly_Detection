@@ -578,7 +578,7 @@ class BaggingModel:
             # Train sub-model with Trainer to get history
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
             trainer = Trainer(model, bag_data, device, optimizer, criterion)
-            best_stats, training_history = trainer.fit(epochs=epochs)
+            best_stats, training_history = trainer.fit(epochs=epochs, include_test=False)
 
             self.models.append(model)
             self.bag_indices.append(bag_indices)
@@ -690,7 +690,7 @@ class Trainer:
         return loss.item()
 
     @torch.no_grad()
-    def evaluate(self):
+    def evaluate(self, include_test=True):
         self.model.eval()
         out = self.model(self.data)
         pred = out.argmax(dim=1)
@@ -718,34 +718,7 @@ class Trainer:
             val_auc = float('nan')
             val_macro_auc = float('nan')
 
-        # Test set evaluation
-        test_y_true = self.data.y[self.data.test_mask].cpu().numpy()
-        test_y_pred = pred[self.data.test_mask].cpu().numpy()
-        test_f1 = f1_score(test_y_true, test_y_pred, average='binary', pos_label=1, zero_division=0)
-        test_acc = accuracy_score(test_y_true, test_y_pred)
-
-        # Calculate probabilities for AUC
-        probs = torch.exp(out).cpu().numpy()
-        test_mask_np = self.data.test_mask.cpu().numpy()
-
-        # Illicit class metrics (Class 1)
-        test_precision_illicit = precision_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
-        test_recall_illicit = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
-
-        # Macro metrics
-        test_macro_recall = recall_score(test_y_true, test_y_pred, average='macro', zero_division=0)
-        test_macro_f1 = f1_score(test_y_true, test_y_pred, average='macro', zero_division=0)
-
-        # AUC
-        test_auc = roc_auc_score(test_y_true, probs[test_mask_np][:, 1])
-        test_macro_auc = test_auc  # For binary classification, macro AUC equals regular AUC
-
-        # G-Mean
-        test_sensitivity = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
-        test_specificity = recall_score(test_y_true, test_y_pred, pos_label=0, zero_division=0)
-        test_gmean = np.sqrt(test_sensitivity * test_specificity) if test_sensitivity * test_specificity > 0 else 0
-
-        return {
+        result = {
             'val_loss': val_loss,
             'val_f1': val_f1,
             'val_acc': val_acc,
@@ -753,25 +726,71 @@ class Trainer:
             'val_macro_f1': val_macro_f1,
             'val_auc': val_auc,
             'val_macro_auc': val_macro_auc,
-            'val_gmean': val_gmean,
-            'test_f1': test_f1,
-            'test_acc': test_acc,
-            'test_precision_illicit': test_precision_illicit,
-            'test_recall_illicit': test_recall_illicit,
-            'test_macro_recall': test_macro_recall,
-            'test_macro_f1': test_macro_f1,
-            'test_auc': test_auc,
-            'test_macro_auc': test_macro_auc,
-            'test_gmean': test_gmean
+            'val_gmean': val_gmean
         }
 
-    def fit(self, epochs=100):
+        # Test set evaluation (only if requested and test samples exist)
+        if include_test and self.data.test_mask.sum() > 0:
+            test_y_true = self.data.y[self.data.test_mask].cpu().numpy()
+            test_y_pred = pred[self.data.test_mask].cpu().numpy()
+            test_f1 = f1_score(test_y_true, test_y_pred, average='binary', pos_label=1, zero_division=0)
+            test_acc = accuracy_score(test_y_true, test_y_pred)
+
+            # Calculate probabilities for AUC
+            probs = torch.exp(out).cpu().numpy()
+            test_mask_np = self.data.test_mask.cpu().numpy()
+
+            # Illicit class metrics (Class 1)
+            test_precision_illicit = precision_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
+            test_recall_illicit = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
+
+            # Macro metrics
+            test_macro_recall = recall_score(test_y_true, test_y_pred, average='macro', zero_division=0)
+            test_macro_f1 = f1_score(test_y_true, test_y_pred, average='macro', zero_division=0)
+
+            # AUC
+            test_auc = roc_auc_score(test_y_true, probs[test_mask_np][:, 1])
+            test_macro_auc = test_auc  # For binary classification, macro AUC equals regular AUC
+
+            # G-Mean
+            test_sensitivity = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
+            test_specificity = recall_score(test_y_true, test_y_pred, pos_label=0, zero_division=0)
+            test_gmean = np.sqrt(test_sensitivity * test_specificity) if test_sensitivity * test_specificity > 0 else 0
+
+            result.update({
+                'test_f1': test_f1,
+                'test_acc': test_acc,
+                'test_precision_illicit': test_precision_illicit,
+                'test_recall_illicit': test_recall_illicit,
+                'test_macro_recall': test_macro_recall,
+                'test_macro_f1': test_macro_f1,
+                'test_auc': test_auc,
+                'test_macro_auc': test_macro_auc,
+                'test_gmean': test_gmean
+            })
+        else:
+            # Add dummy test metrics if no test data available
+            result.update({
+                'test_f1': 0.0,
+                'test_acc': 0.0,
+                'test_precision_illicit': 0.0,
+                'test_recall_illicit': 0.0,
+                'test_macro_recall': 0.0,
+                'test_macro_f1': 0.0,
+                'test_auc': 0.0,
+                'test_macro_auc': 0.0,
+                'test_gmean': 0.0
+            })
+
+        return result
+
+    def fit(self, epochs=100, include_test=True):
         best_val_loss = float('inf')
         best_stats = None
 
         for epoch in range(epochs):
             train_loss = self.train_epoch()
-            stats = self.evaluate()
+            stats = self.evaluate(include_test=include_test)
 
             self.history.add_epoch(
                 epoch=epoch + 1,  # Epoch starts from 1
