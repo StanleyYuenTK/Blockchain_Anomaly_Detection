@@ -1514,6 +1514,81 @@ def plot_model_comparison(ensemble_results, gcn_results, iforest_results, save_p
     plt.show()
 
 
+def plot_individual_metrics(results_collector, save_dir='results/metrics'):
+    """
+    Generate individual bar charts for each metric comparing all models
+
+    Args:
+        results_collector: Dictionary containing results for all models
+        save_dir: Directory to save the individual metric charts
+    """
+    import os
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+
+    # Create save directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Define the models to compare
+    models = ['Final_Ensemble', 'GCN_Bagging', 'GAT_Bagging', 'GIN_Bagging', 'GraphSAGE_Bagging', 'GCN_Single', 'IForest']
+    model_labels = ['Final Ensemble', 'GCN Bagging', 'GAT Bagging', 'GIN Bagging', 'GraphSAGE Bagging', 'GCN Baseline', 'Isolation Forest']
+
+    # Define metrics to plot
+    metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
+    metric_labels = ['Accuracy', 'Precision', 'Recall', 'F1-score', 'ROC-AUC']
+
+    # Color palette for 7 models
+    colors = ['#2E86AB', '#A23B72', '#27AE60', '#E67E22', '#9B59B6', '#F24236', '#F5A623']
+    # Blue, Purple, Green, Orange, Magenta, Red, Yellow
+
+    # Create individual plots for each metric
+    for metric, metric_label in zip(metrics, metric_labels):
+        fig, ax = plt.subplots(figsize=(14, 7))
+
+        # Collect values for this metric
+        values = []
+        for model in models:
+            value = results_collector[model].get(metric, np.nan)
+            values.append(value)
+
+        # Create bars
+        bars = ax.bar(model_labels, values, color=colors, alpha=0.8,
+                     edgecolor='black', linewidth=1.5, width=0.35)
+
+        # Add value labels on top of bars
+        for bar, value in zip(bars, values):
+            height = bar.get_height()
+            if not np.isnan(height):
+                ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                       f'{height:.4f}', ha='center', va='bottom',
+                       fontsize=12, fontweight='bold')
+
+        # Customize the plot
+        ax.set_ylabel(metric_label, fontsize=14, fontweight='bold')
+        ax.set_title(f'Model Comparison: {metric_label}', fontsize=16, fontweight='bold', pad=20)
+        ax.set_ylim(0, max([v for v in values if not np.isnan(v)]) * 1.15 if any(not np.isnan(v) for v in values) else 1)
+
+        # Rotate x-axis labels for better readability
+        plt.xticks(rotation=30, ha='right')
+
+        # Add grid
+        ax.grid(True, alpha=0.3, axis='y')
+
+        # Adjust layout
+        plt.tight_layout()
+
+        # Save the plot
+        filename = f'{metric}_comparison.png'
+        save_path = os.path.join(save_dir, filename)
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Individual metric chart saved to: {save_path}")
+
+        plt.close()
+
+    print(f"\nAll individual metric charts saved to: {save_dir}")
+
+
 if __name__ == '__main__':
     import torch
 

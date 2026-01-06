@@ -1052,6 +1052,20 @@ def run_full_pipeline():
     data = augment_illegal_samples_with_gan(data, device, augment_ratio=0.3, num_epochs=50)  # Generate 30% more illegal samples
     print(f"Data augmentation completed: {data.x.size(0)} nodes total")
 
+    # Initialize results collector
+    results_collector = {
+        'IForest': baseline_results,
+        'GCN_Single': {},
+        'GAT_Single': {},
+        'GIN_Single': {},
+        'GraphSAGE_Single': {},
+        'GCN_Bagging': {},  # GCN Bagging ensemble only
+        'GAT_Bagging': {},  # GAT Bagging ensemble only
+        'GIN_Bagging': {},  # GIN Bagging ensemble only
+        'GraphSAGE_Bagging': {},  # GraphSAGE Bagging ensemble only
+        'Final_Ensemble': {}
+    }
+
     # Hyperopt hyperparameter optimization
     print("\n2. Starting Hyperopt hyperparameter optimization...")
 
@@ -1174,6 +1188,22 @@ def run_full_pipeline():
         ensemble.fit(data, device, epochs=100)
         ensemble_models[model_name] = ensemble
 
+        # Evaluate individual bagging ensemble for each model
+        print(f"\nEvaluating {model_name} Bagging Ensemble individually...")
+        bagging_pred = ensemble.predict(data, device)
+        # Calculate average probabilities from bagging models
+        probs_list = []
+        for sub_model in ensemble.models:
+            sub_model.eval()
+            with torch.no_grad():
+                output = sub_model(data)
+                probs = torch.exp(output).cpu().numpy()
+                probs_list.append(probs)
+        bagging_avg_probs = np.mean(probs_list, axis=0)
+        bagging_pred_test = bagging_pred[data.test_mask.cpu().numpy()]
+        bagging_probs_test = bagging_avg_probs[data.test_mask.cpu().numpy()]
+        results_collector[f'{model_name}_Bagging'] = calculate_all_metrics(test_y_true, bagging_pred_test, bagging_probs_test)
+
     # Create final ensemble
     print("\n4. Creating final ensemble model (Bagging GCN + Bagging GAT + Bagging GIN + Bagging GraphSAGE)...")
 
@@ -1181,16 +1211,6 @@ def run_full_pipeline():
 
     # Define test labels for evaluation
     test_y_true = data.y[data.test_mask].cpu().numpy()
-
-    # Initialize results collector
-    results_collector = {
-        'IForest': baseline_results,
-        'GCN_Single': {},
-        'GAT_Single': {},
-        'GIN_Single': {},
-        'GraphSAGE_Single': {},
-        'Final_Ensemble': {}
-    }
 
     # Train and evaluate individual models (without bagging)
     print("\n3.5. Training individual models for baseline comparison...")
@@ -1394,6 +1414,11 @@ def run_full_pipeline():
 
     plot_model_comparison(ensemble_metrics, gcn_single_metrics, baseline_results,
                          save_path='results/model_performance_comparison.png')
+
+    # Plot individual metric charts
+    print("\n6.1. Generating individual metric comparison charts...")
+    from visualization_tools import plot_individual_metrics
+    plot_individual_metrics(results_collector, save_dir='results/metrics')
 
 
     print("\n" + "="*60)
