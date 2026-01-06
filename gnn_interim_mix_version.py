@@ -1056,7 +1056,7 @@ def run_full_pipeline():
             hyperopt_objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=4,  # 30 evaluations
+            max_evals=1,  # 30 evaluations
             trials=trials,
             rstate=np.random.default_rng(42)
         )
