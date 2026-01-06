@@ -1,14 +1,6 @@
 """
-gnn_interim_version.py
-
-Advanced GNN framework version focused on blockchain anomaly detection
-Includes: GCN, GAT, GIN, GraphSAGE (multi-hop neighbor information learning)
-Ensemble + Bagging, Hyperopt (Bayesian Optimization)
-Focal Loss for class imbalance, GAN-based data augmentation, PyTorch Geometric MLP
-Isolation Forest Baseline for performance comparison
-
-Execute all functions with one click, no command line arguments needed
-Includes automatic baseline evaluation and performance comparison
+Student ID: 24027277d
+Name: Yuen Tsz Ki
 """
 
 import os
@@ -16,7 +8,6 @@ import warnings
 import numpy as np
 import pandas as pd
 from collections import Counter
-import copy
 import random
 
 import torch
@@ -25,26 +16,38 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, MLP
 
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 from sklearn.metrics import f1_score, accuracy_score, classification_report, confusion_matrix, roc_auc_score, recall_score, precision_score
-from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
 # Hyperopt imports
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
-import hyperopt
+from functools import partial
+
+def create_model_configs(data, best_hidden_channels, best_num_layers, best_num_heads, dropout_value):
+    """Create model parameter configurations for all GNN models"""
+    base_config = {
+        'in_channels': data.x.size(1),
+        'hidden_channels': best_hidden_channels,
+        'out_channels': 2,
+        'num_layers': best_num_layers,
+        'dropout': dropout_value
+    }
+
+    configs = {
+        'GCN': base_config.copy(),
+        'GIN': base_config.copy(),
+        'GraphSAGE': base_config.copy(),
+        'GAT': {
+            **base_config,
+            'num_heads': best_num_heads
+        }
+    }
+
+    return configs
 
 # Visualization tools
-from visualization_tools import plot_confusion_matrix, plot_feature_visualization_2d, plot_training_curves, TrainingHistory, plot_model_comparison
-
-# Additional visualization imports for explain_model
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import networkx as nx
-from torch_geometric.utils import to_networkx
-import seaborn as sns
+from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations
 
 warnings.filterwarnings('ignore')
 
@@ -100,12 +103,7 @@ class GCNModel(BaseGNN):
         self.hidden_channels = hidden_channels
         self.convs = nn.ModuleList()
         self.convs.append(GCNConv(in_channels, hidden_channels))
-        for _ in range(num_layers - 2):
-            self.convs.append(GCNConv(hidden_channels, hidden_channels))
-        if num_layers > 1:
-            self.convs.append(GCNConv(hidden_channels, out_channels))
-        else:                                                     ## 做多咗？
-            self.convs.append(GCNConv(in_channels, out_channels)) ## 做多咗？
+        self.convs.append(GCNConv(hidden_channels, out_channels))
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -132,12 +130,7 @@ class GATModel(BaseGNN):
         self.num_heads = num_heads
         self.convs = nn.ModuleList()
         self.convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
-        for _ in range(num_layers - 2):
-            self.convs.append(GATConv(hidden_channels * num_heads, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
-        if num_layers > 1:
-            self.convs.append(GATConv(hidden_channels * num_heads, out_channels, heads=1, dropout=dropout, concat=False))
-        else:
-            self.convs.append(GATConv(in_channels, out_channels, heads=1, dropout=dropout, concat=False))
+        self.convs.append(GATConv(hidden_channels * num_heads, out_channels, heads=1, dropout=dropout, concat=False))
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -162,12 +155,7 @@ class GraphSAGEModel(BaseGNN):
         self.num_layers = num_layers
         self.convs = nn.ModuleList()
         self.convs.append(SAGEConv(in_channels, hidden_channels, aggr=aggr))
-        for _ in range(num_layers - 2):
-            self.convs.append(SAGEConv(hidden_channels, hidden_channels, aggr=aggr))
-        if num_layers > 1:
-            self.convs.append(SAGEConv(hidden_channels, out_channels, aggr=aggr))
-        else:
-            self.convs.append(SAGEConv(in_channels, out_channels, aggr=aggr))
+        self.convs.append(SAGEConv(hidden_channels, out_channels, aggr=aggr))
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -191,19 +179,10 @@ class GINModel(BaseGNN):
         super(GINModel, self).__init__()
         self.num_layers = num_layers
         self.convs = nn.ModuleList()
-
-        # Use torch_geometric.nn.MLP for GINConv
-        mlp_channels = [in_channels, hidden_channels, hidden_channels]
-        self.convs.append(GINConv(MLP(mlp_channels, dropout=dropout)))
-        for _ in range(num_layers - 2):
-            mlp_channels = [hidden_channels, hidden_channels, hidden_channels]
-            self.convs.append(GINConv(MLP(mlp_channels, dropout=dropout)))
-        if num_layers > 1:
-            mlp_channels = [hidden_channels, hidden_channels, out_channels]
-            self.convs.append(GINConv(MLP(mlp_channels, dropout=dropout)))
-        else:
-            mlp_channels = [in_channels, hidden_channels, out_channels]
-            self.convs.append(GINConv(MLP(mlp_channels, dropout=dropout)))
+        # mlp_channels = [in_channels, hidden_channels, hidden_channels]
+        self.convs.append(GINConv(MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout)))
+        # mlp_channels = [hidden_channels, hidden_channels, out_channels]
+        self.convs.append(GINConv(MLP([hidden_channels, hidden_channels, out_channels], dropout=dropout)))
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -262,6 +241,15 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         return self.model(x)
+
+
+# Model class mapping for cleaner code
+MODEL_CLASSES = {
+    'GCN': GCNModel,
+    'GAT': GATModel,
+    'GIN': GINModel,
+    'GraphSAGE': GraphSAGEModel
+}
 
 
 def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=128, num_epochs=100, augment_ratio=0.5):
@@ -485,20 +473,6 @@ def load_elliptic_data(dataset_dir='../Dataset'):
     edgelist_path = os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv')
     features_path = os.path.join(dataset_dir, 'elliptic_txs_features.csv')
 
-    # if not all(os.path.exists(p) for p in [classes_path, edgelist_path, features_path]):
-    #     print("Dataset files not found in standard location. Searching other locations...")
-    #     # Try to find dataset files in current directory or subdirectories
-    #     current_dir = os.getcwd()
-    #     for root, dirs, files in os.walk(current_dir):
-    #         if 'elliptic_txs_classes.csv' in files and 'elliptic_txs_edgelist.csv' in files and 'elliptic_txs_features.csv' in files:
-    #             dataset_dir = root
-    #             print(f"Found dataset files in: {dataset_dir}")
-    #             classes_path = os.path.join(dataset_dir, 'elliptic_txs_classes.csv')
-    #             edgelist_path = os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv')
-    #             features_path = os.path.join(dataset_dir, 'elliptic_txs_features.csv')
-    #             break
-    #     else:
-    #         raise FileNotFoundError("Dataset files not found. Please ensure elliptic_txs_classes.csv, elliptic_txs_edgelist.csv, and elliptic_txs_features.csv are available.")
     classes_df = pd.read_csv(classes_path)
     edgelist_df = pd.read_csv(edgelist_path)
     features_df = pd.read_csv(features_path, header=None)
@@ -711,7 +685,7 @@ class Trainer:
             'test_gmean': test_gmean
         }
 
-    def fit(self, epochs=100, reduction_method='pca'): #extract_features_after=False, 
+    def fit(self, epochs=100): 
         best_val_loss = float('inf')
         best_stats = None
 
@@ -746,12 +720,6 @@ class Trainer:
                       f"Val Loss: {stats['val_loss']:.4f}, Val F1: {stats['val_f1']:.4f}, "
                       f"Test F1: {stats['test_f1']:.4f}")
 
-        # # Feature extraction and visualization
-        # if extract_features_after:
-        #     print("\nExtracting features and performing visualization...")
-        #     extracted, reduced = perform_feature_extraction_and_reduction(
-        #         self.model, self.data, self.device, reduction_method=reduction_method
-        #     )
 
         return best_stats, self.history
 
@@ -818,49 +786,6 @@ class FinalEnsemble:
             return final_avg_probs
 
 
-# -----------------------
-# Feature Extraction
-# -----------------------
-
-@torch.no_grad()
-def extract_features(model, data, device, layer_idx=-1):
-    model.eval()
-    out = model(data, return_embed=True)
-    if isinstance(out, tuple):
-        _, embed = out
-    else:
-        embed = out
-    if isinstance(embed, dict):
-        embed = torch.cat([v for v in embed.values()], dim=1)
-    return embed.cpu().numpy()
-
-
-def reduce_dimension_pca(features, n_components=2):
-    pca = PCA(n_components=n_components, random_state=42)
-    reduced = pca.fit_transform(features)
-    return reduced
-
-
-def reduce_dimension_tsne(features, n_components=2, perplexity=30, n_iter=1000):
-    if features.shape[1] > 50:
-        pca = PCA(n_components=50, random_state=42)
-        features = pca.fit_transform(features)
-    tsne = TSNE(n_components=n_components, perplexity=perplexity, n_iter=n_iter, random_state=42, verbose=0)
-    reduced = tsne.fit_transform(features)
-    return reduced
-
-
-def perform_feature_extraction_and_reduction(model, data, device, reduction_method='pca', n_components=2, visualize=True, save_path=None):
-    extracted = extract_features(model, data, device)
-    if reduction_method.lower() == 'pca':
-        reduced = reduce_dimension_pca(extracted, n_components)
-        method_name = 'PCA'
-    else:
-        reduced = reduce_dimension_tsne(extracted, n_components)
-        method_name = 't-SNE'
-    if visualize and n_components == 2:
-        plot_feature_visualization_2d(reduced, data.y, title=f"{type(model).__name__} Feature Visualization", method=method_name, save_path=save_path)
-    return extracted, reduced
 
 
 
@@ -868,19 +793,12 @@ def perform_feature_extraction_and_reduction(model, data, device, reduction_meth
 # Hyperopt Objective Function
 # -----------------------
 
-def hyperopt_objective(params):
+def hyperopt_objective(data, device, params):
     """Hyperopt optimization objective function"""
     # Set random seeds for reproducibility
     torch.manual_seed(42)
     np.random.seed(42)
     random.seed(42)
-
-    # Load data
-    data = load_elliptic_data()
-
-    # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    data = data.to(device)
 
     # Hyperopt returns actual values, not indices
     model_name = params['model']
@@ -889,8 +807,10 @@ def hyperopt_objective(params):
     dropout = params['dropout']
     num_heads = params['num_heads']
 
+    # Create model using the mapping
+    model_class = MODEL_CLASSES.get(model_name, GCNModel)
     if model_name == 'GAT':
-        model = GATModel(
+        model = model_class(
             in_channels=data.x.size(1),
             hidden_channels=hidden_channels,
             out_channels=2,
@@ -898,24 +818,8 @@ def hyperopt_objective(params):
             num_layers=num_layers,
             dropout=dropout
         )
-    elif model_name == 'GIN':
-        model = GINModel(
-            in_channels=data.x.size(1),
-            hidden_channels=hidden_channels,
-            out_channels=2,
-            num_layers=num_layers,
-            dropout=dropout
-        )
-    elif model_name == 'GraphSAGE':
-        model = GraphSAGEModel(
-            in_channels=data.x.size(1),
-            hidden_channels=hidden_channels,
-            out_channels=2,
-            num_layers=num_layers,
-            dropout=dropout
-        )
-    else:  # GCN
-        model = GCNModel(
+    else:
+        model = model_class(
             in_channels=data.x.size(1),
             hidden_channels=hidden_channels,
             out_channels=2,
@@ -1035,11 +939,11 @@ def run_full_pipeline():
     # Define search space with reasonable minimum values
     space = {
         'model': hp.choice('model', ['GCN', 'GAT', 'GIN', 'GraphSAGE']),
-        'hidden_channels': hp.choice('hidden_channels', [64, 128, 256]),  # Removed 32 to ensure sufficient capacity
+        'hidden_channels': hp.choice('hidden_channels', [64, 128, 256]),
         'dropout': hp.uniform('dropout', 0.1, 0.5),
-        'num_layers': hp.choice('num_layers', [2, 3]),  # Limited to 2-3 layers to avoid dimension collapse
+        'num_layers': hp.choice('num_layers', [2, 3]),
         'lr': hp.loguniform('lr', np.log(1e-4), np.log(1e-2)),
-        'num_heads': hp.choice('num_heads', [4, 8])  # Limited to 4-8 heads
+        'num_heads': hp.choice('num_heads', [4, 8])
     }
 
     # Define choice lists for index conversion
@@ -1050,36 +954,22 @@ def run_full_pipeline():
 
     # Run optimization
     trials = Trials()
-    # Skip hyperopt for debugging - use default parameters
-    SKIP_HYPEROPT = False  # Set to True to skip hyperopt and use defaults
-
-    if SKIP_HYPEROPT:
-        # Use default parameters for debugging
-        best = {
-            'model': 0,  # GCN
-            'hidden_channels': 0,  # 64
-            'dropout': 0.3,
-            'num_layers': 0,  # 2
-            'lr': 0.001,
-            'num_heads': 0  # 4
-        }
-    else:
-        best = fmin(
-            hyperopt_objective,
-            space=space,
-            algo=tpe.suggest,
-            max_evals=8,  # 30 evaluations
-            trials=trials,
-            rstate=np.random.default_rng(42)
-        )
+    # Use partial to bind data and device to the objective function
+    objective_with_data = partial(hyperopt_objective, data, device)
+    best = fmin(
+        objective_with_data,
+        space=space,
+        algo=tpe.suggest,
+        max_evals=8,  # 30 evaluations
+        trials=trials,
+        rstate=np.random.default_rng(42)
+    )
 
     # Convert indices back to actual values (hp.choice returns indices, not values)
     best_model = MODEL_CHOICES[best['model']]
     best_hidden_channels = HIDDEN_CHANNEL_CHOICES[best['hidden_channels']]
     best_num_layers = NUM_LAYER_CHOICES[best['num_layers']]
     best_num_heads = NUM_HEAD_CHOICES[best['num_heads']]
-    best_dropout = best['dropout']  # hp.uniform returns actual value
-    best_lr = best['lr']  # hp.loguniform returns actual value
 
     # Validate parameters to ensure they're reasonable
     if best_hidden_channels < 32:
@@ -1129,48 +1019,14 @@ def run_full_pipeline():
     best_num_layers = min(max(best_num_layers, 2), 4)
     best_num_heads = min(max(best_num_heads, 4), 16)
 
-    single_model_configs = {
-        'GCN': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        },
-        'GAT': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_heads': best_num_heads,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        },
-        'GIN': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        },
-        'GraphSAGE': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        }
-    }
+    single_model_configs = create_model_configs(
+        data, best_hidden_channels, best_num_layers,
+        best_num_heads, best['dropout']
+    )
 
     for model_name, params in single_model_configs.items():
         print(f"\nTraining single {model_name} model...")
-        if model_name == 'GCN':
-            model_class = GCNModel
-        elif model_name == 'GAT':
-            model_class = GATModel
-        elif model_name == 'GIN':
-            model_class = GINModel
-        elif model_name == 'GraphSAGE':
-            model_class = GraphSAGEModel
+        model_class = MODEL_CLASSES[model_name]
 
         # Create and train single model
         single_model = model_class(**params)
@@ -1202,51 +1058,17 @@ def run_full_pipeline():
     print("\n6. Training bagging GNN models...")
 
     # Create BaggingEnsemble combining GCN, GAT, GIN, GraphSAGE
-    bagging_model_configs = {
-        'GCN': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        },
-        'GAT': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_heads': best_num_heads,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        },
-        'GIN': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        },
-        'GraphSAGE': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_layers': best_num_layers,
-            'dropout': best['dropout']
-        }
-    }
+    bagging_model_configs = create_model_configs(
+        data, best_hidden_channels, best_num_layers,
+        best_num_heads, best['dropout']
+    )
 
     # Train four ensemble models
     ensemble_models = {}
     for model_name, params in bagging_model_configs.items():
         print(f"\nTraining {model_name} Bagging Ensemble...")
 
-        if model_name == 'GCN':
-            model_class = GCNModel
-        elif model_name == 'GAT':
-            model_class = GATModel
-        elif model_name == 'GIN':
-            model_class = GINModel
-        elif model_name == 'GraphSAGE':
-            model_class = GraphSAGEModel
+        model_class = MODEL_CLASSES[model_name]
 
         ensemble = BaggingModel(
             model_class=model_class,
@@ -1318,98 +1140,8 @@ def run_full_pipeline():
     # ========================================================================
     # 8. Generate visualizations and training curves
     # ========================================================================
-    print("\n8. Generating visualizations and training curves...")
-
-    os.makedirs('results', exist_ok=True)
-
-    # Plot confusion matrix
-    plot_confusion_matrix(test_y_true, test_y_pred, model_name='Final Ensemble Model',
-                         save_path='results/confusion_matrix.png')
-
-    # Plot individual metric charts
-    print("Generating individual metric comparison charts...")
-    from visualization_tools import plot_individual_metrics
-    plot_individual_metrics(results_collector, save_dir='results/metrics')
-
-    # Plot training curves for all models (showing fitting process)
-    print("Generating training curves for all models...")
-    import matplotlib.pyplot as plt
-
-    # Models to generate training curves for
-    models_to_plot = [
-        'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single',
-        'GCN_Bagging', 'GAT_Bagging', 'GIN_Bagging', 'GraphSAGE_Bagging'
-    ]
-
-    for model_key in models_to_plot:
-        if model_key in training_histories and training_histories[model_key] is not None:
-            history = training_histories[model_key]
-            model_name = model_key.replace('_', ' ')
-
-            epochs = history.history['epoch']
-            train_losses = history.history['train_loss']
-            val_losses = history.history['val_loss']
-            val_f1_scores = history.history['val_f1']
-            test_f1_scores = history.history['test_f1']
-
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-            fig.suptitle(f'{model_name} Training Process', fontsize=16, fontweight='bold')
-
-            # Loss curves
-            ax1.plot(epochs, train_losses, label='Training Loss', linewidth=2, color='#e74c3c', alpha=0.8)
-            ax1.plot(epochs, val_losses, label='Validation Loss', linewidth=2, color='#3498db', alpha=0.8)
-            ax1.set_xlabel('Epoch', fontsize=12)
-            ax1.set_ylabel('Loss', fontsize=12)
-            ax1.set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
-
-            # F1 Score curves
-            ax2.plot(epochs, val_f1_scores, label='Validation F1', linewidth=2, color='#f39c12', alpha=0.8)
-            ax2.plot(epochs, test_f1_scores, label='Test F1', linewidth=2, color='#27ae60', alpha=0.8)
-            ax2.set_xlabel('Epoch', fontsize=12)
-            ax2.set_ylabel('F1 Score', fontsize=12)
-            ax2.set_title('Validation and Test F1 Score', fontsize=14, fontweight='bold')
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            filename = f'{model_key.lower()}_training_curves.png'
-            plt.savefig(f'results/{filename}', dpi=300, bbox_inches='tight')
-            plt.close()
-
-            print(f"Training curves saved to: results/{filename}")
-        else:
-            print(f"Warning: No training history available for {model_key}")
-
-    # Create a summary plot for the final ensemble (no training history, just final performance)
-    print("Generating ensemble performance summary...")
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Get final metrics for ensemble
-    ensemble_metrics = results_collector.get('Final_Ensemble', {})
-    if ensemble_metrics:
-        metrics_names = ['f1', 'accuracy', 'precision', 'recall', 'macro_f1', 'auc']
-        metrics_values = [ensemble_metrics.get(m, 0) for m in metrics_names]
-
-        bars = ax.bar(metrics_names, metrics_values, color='#9b59b6', alpha=0.8, width=0.6)
-        ax.set_ylabel('Score', fontsize=12)
-        ax.set_title('Final Ensemble Performance Summary', fontsize=16, fontweight='bold')
-        ax.set_ylim(0, 1.0)
-        ax.grid(True, alpha=0.3, axis='y')
-
-        # Add value labels on bars
-        for bar, value in zip(bars, metrics_values):
-            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01,
-                   f'{value:.4f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
-
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        plt.savefig('results/final_ensemble_summary.png', dpi=300, bbox_inches='tight')
-        plt.close()
-        print("Ensemble summary saved to: results/final_ensemble_summary.png")
-    else:
-        print("Warning: No ensemble metrics available for summary")
+    
+    generate_standard_gnn_visualizations(results_collector, training_histories, test_y_true, test_y_pred)
 
 
     print("\n" + "="*60)
