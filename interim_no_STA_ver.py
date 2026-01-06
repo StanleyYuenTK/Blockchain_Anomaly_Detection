@@ -447,7 +447,7 @@ def load_elliptic_data(dataset_dir='../Dataset'):
     Dataset Description:
     - 203,769 nodes (transactions), 234,355 edges
     - Each node has 166 features (after excluding txId, timestep, and class)
-    - Labels: '2'/'licit' -> 0 (Legal), '1'/'illicit' -> 1 (Illegal), 'unknown' -> -1
+    - Labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), 'unknown' -> -1
     - Time steps: 1-49 (about 2 weeks each)
     - Known labels: 4,545 illicit (2%), 42,019 licit (21%), rest unknown
 
@@ -480,20 +480,20 @@ def load_elliptic_data(dataset_dir='../Dataset'):
 
     print(f"Loaded {x.size(0)} nodes with {x.size(1)} features (expected: 166)")
 
-    # Convert labels: '2'/'licit' -> 0 (Legal), '1'/'illicit' -> 1 (Illegal), else -> -1 (Unknown)
+    # Convert labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), else -> -1 (Unknown)
     labels = nodes_df['class'].apply(lambda c: 0 if c == '2' else (1 if c == '1' else -1))
     y = torch.tensor(labels.values, dtype=torch.long)
 
     # Print label statistics
     total_nodes = len(y)
-    legal_count = (y == 0).sum().item()
+    licit_count = (y == 0).sum().item()
     illicit_count = (y == 1).sum().item()
     unknown_count = (y == -1).sum().item()
 
     print(f"Label distribution:")
-    print(f"  Legal (class 0): {legal_count} nodes ({legal_count/total_nodes*100:.1f}%)")
-    print(f"  Illicit (class 1): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
-    print(f"  Unknown (class -1): {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
+    print(f"class1 (Illicit): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
+    print(f"class2 (licit): {licit_count} nodes ({licit_count/total_nodes*100:.1f}%)")
+    print(f"class-1 (Unknown): {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
     # Build transaction ID mapping
     tx_ids = nodes_df['txId'].values
     tx_id_map = {tx_id: i for i, tx_id in enumerate(tx_ids)}
@@ -537,11 +537,11 @@ def load_elliptic_data(dataset_dir='../Dataset'):
 
     # Print class distribution in test set
     test_labels = y[data.test_mask]
-    test_legal = (test_labels == 0).sum().item()
+    test_licit = (test_labels == 0).sum().item()
     test_illicit = (test_labels == 1).sum().item()
     print(f"Test set class distribution:")
-    print(f"  Legal: {test_legal} ({test_legal/test_count*100:.1f}%)")
-    print(f"  Illicit: {test_illicit} ({test_illicit/test_count*100:.1f}%)")
+    print(f"  licit: {test_licit} ({test_licit/test_count*100:.1f}%)")
+    print(f"  illicit: {test_illicit} ({test_illicit/test_count*100:.1f}%)")
 
     return data
 
@@ -1054,7 +1054,7 @@ def run_full_pipeline():
     print(f"G-Mean: {ensemble_results['gmean']:.4f}")
 
     print("\nClassification Report:")
-    print(classification_report(test_y_true, test_y_pred, target_names=['Legal', 'Illegal'], zero_division=0))
+    print(classification_report(test_y_true, test_y_pred, target_names=['licit', 'illicit'], zero_division=0))
 
     # ========================================================================
     # 7. Generate visualizations and training curves

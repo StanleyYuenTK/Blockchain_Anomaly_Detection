@@ -90,8 +90,8 @@ def plot_confusion_matrix(y_true, y_pred, model_name='Model', save_path=None):
 
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=['Legal', 'Illegal'],
-                yticklabels=['Legal', 'Illegal'],
+                xticklabels=['licit', 'illicit'],
+                yticklabels=['licit', 'illicit'],
                 cbar_kws={'label': 'Count'})
 
     plt.title(f'{model_name} Confusion Matrix', fontsize=14, weight='bold')
