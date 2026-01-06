@@ -1531,20 +1531,23 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
     os.makedirs(save_dir, exist_ok=True)
 
     # Define the models to compare
-    models = ['Final_Ensemble', 'GCN_Bagging', 'GAT_Bagging', 'GIN_Bagging', 'GraphSAGE_Bagging', 'GCN_Single', 'IForest']
-    model_labels = ['Final Ensemble', 'GCN Bagging', 'GAT Bagging', 'GIN Bagging', 'GraphSAGE Bagging', 'GCN Baseline', 'Isolation Forest']
+    models = ['Final_Ensemble', 'GCN_Bagging', 'GAT_Bagging', 'GIN_Bagging', 'GraphSAGE_Bagging',
+              'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single', 'IForest']
+    model_labels = ['Final Ensemble', 'GCN Bagging', 'GAT Bagging', 'GIN Bagging', 'GraphSAGE Bagging',
+                    'GCN Single', 'GAT Single', 'GIN Single', 'GraphSAGE Single', 'Isolation Forest']
 
     # Define metrics to plot
     metrics = ['accuracy', 'precision', 'recall', 'f1', 'auc']
     metric_labels = ['Accuracy', 'Precision', 'Recall', 'F1-score', 'ROC-AUC']
 
-    # Color palette for 7 models
-    colors = ['#2E86AB', '#A23B72', '#27AE60', '#E67E22', '#9B59B6', '#F24236', '#F5A623']
-    # Blue, Purple, Green, Orange, Magenta, Red, Yellow
+    # Color palette for 10 models
+    colors = ['#2E86AB', '#A23B72', '#27AE60', '#E67E22', '#9B59B6', '#F24236', '#F5A623',
+              '#1ABC9C', '#34495E', '#E74C3C']
+    # Blue, Purple, Green, Orange, Magenta, Red, Yellow, Teal, Dark Blue, Bright Red
 
     # Create individual plots for each metric
     for metric, metric_label in zip(metrics, metric_labels):
-        fig, ax = plt.subplots(figsize=(14, 7))
+        fig, ax = plt.subplots(figsize=(16, 8))
 
         # Collect values for this metric
         values = []
@@ -1554,7 +1557,7 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
 
         # Create bars
         bars = ax.bar(model_labels, values, color=colors, alpha=0.8,
-                     edgecolor='black', linewidth=1.5, width=0.35)
+                     edgecolor='black', linewidth=1.5, width=0.25)
 
         # Add value labels on top of bars
         for bar, value in zip(bars, values):
@@ -1570,7 +1573,7 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
         ax.set_ylim(0, max([v for v in values if not np.isnan(v)]) * 1.15 if any(not np.isnan(v) for v in values) else 1)
 
         # Rotate x-axis labels for better readability
-        plt.xticks(rotation=30, ha='right')
+        plt.xticks(rotation=45, ha='right')
 
         # Add grid
         ax.grid(True, alpha=0.3, axis='y')
