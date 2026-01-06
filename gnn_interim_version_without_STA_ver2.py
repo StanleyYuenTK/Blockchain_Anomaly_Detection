@@ -932,7 +932,7 @@ def hyperopt_objective(params):
     trainer = Trainer(model, data, device, optimizer, criterion)
 
     # Train
-    best_stats = trainer.fit(epochs=50)  # Fewer training epochs to speed up optimization
+    best_stats, _ = trainer.fit(epochs=50)  # Fewer training epochs to speed up optimization
 
     # Return negative F1 score (Hyperopt minimizes objective)
     return {
@@ -1070,7 +1070,7 @@ def run_full_pipeline():
             hyperopt_objective,
             space=space,
             algo=tpe.suggest,
-            max_evals=8,  # 30 evaluations
+            max_evals=4,  # 30 evaluations
             trials=trials,
             rstate=np.random.default_rng(42)
         )
