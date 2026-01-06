@@ -31,7 +31,7 @@ def create_model_configs(data, best_hidden_channels, best_num_heads, dropout_val
         'in_channels': data.x.size(1),
         'hidden_channels': best_hidden_channels,
         'out_channels': 2,
-        'num_layers': 2,  # Fixed to 2 layers
+        # 'num_layers': 2,  # Fixed to 2 layers
         'dropout': dropout_value
     }
 

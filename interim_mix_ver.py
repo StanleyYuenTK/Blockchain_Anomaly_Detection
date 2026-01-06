@@ -262,7 +262,6 @@ class Discriminator(nn.Module):
 
 def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=128, num_epochs=100, augment_ratio=0.5):
     """Use GAN to generate additional illegal (class 1) samples"""
-    print("Applying GAN-based data augmentation for illegal samples...")
 
     # Extract illegal samples (class 1)
     illegal_mask = (data.y == 1)
@@ -868,11 +867,19 @@ def hyperopt_objective(data, device, params):
     np.random.seed(42)
     random.seed(42)
 
-    # Hyperopt returns actual values, not indices
-    model_name = params['model']
-    hidden_channels = params['hidden_channels']
-    dropout = params['dropout']
-    num_heads = params['num_heads']
+    # Clean up params to ensure only current parameters are used
+    cleaned_params = {
+        'model': params['model'],
+        'hidden_channels': params['hidden_channels'],
+        'dropout': params['dropout'],
+        'num_heads': params['num_heads'],
+        'lr': params['lr']
+    }
+
+    model_name = cleaned_params['model']
+    hidden_channels = cleaned_params['hidden_channels']
+    dropout = cleaned_params['dropout']
+    num_heads = cleaned_params['num_heads']
 
     # Create model using the mapping
     model_class = MODEL_CLASSES.get(model_name, MixHopGCNModel)
@@ -1020,7 +1027,7 @@ def run_full_pipeline():
         objective_with_data,
         space=space,
         algo=tpe.suggest,
-        max_evals=8,  # 30 evaluations
+        max_evals=1,  # 30 evaluations
         trials=trials,
         rstate=np.random.default_rng(42)
     )
