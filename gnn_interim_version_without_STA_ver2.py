@@ -932,7 +932,7 @@ def hyperopt_objective(params):
     trainer = Trainer(model, data, device, optimizer, criterion)
 
     # Train
-    best_stats, _ = trainer.fit(epochs=50)  # Fewer training epochs to speed up optimization
+    best_stats, _ = trainer.fit(epochs=50)  # Fewer training epochs to speed up optimization, ignore history
 
     # Return negative F1 score (Hyperopt minimizes objective)
     return {
