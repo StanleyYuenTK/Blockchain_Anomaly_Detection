@@ -126,9 +126,26 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
     # Create save directory if it doesn't exist
     os.makedirs(save_dir, exist_ok=True)
 
-    # Define the models to compare
-    models = ['Final_Ensemble', 'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single', 'IForest']
-    model_labels = ['Final Ensemble', 'GCN Single', 'GAT Single', 'GIN Single', 'GraphSAGE Single', 'Isolation Forest']
+    # Define the models to compare - check if this is for MixHopConv models
+    if 'MixHop_Final_Ensemble' in results_collector:
+        # This is for MixHopConv models
+        models = ['MixHop_Final_Ensemble', 'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single', 'IForest']
+        model_labels = ['MixHop Final Ensemble', 'MixHop GCN Single', 'MixHop GAT Single', 'MixHop GIN Single', 'MixHop GraphSAGE Single', 'Isolation Forest']
+    else:
+        # This is for regular GNN models
+        models = ['Final_Ensemble', 'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single', 'IForest']
+        model_labels = ['Final Ensemble', 'GCN Single', 'GAT Single', 'GIN Single', 'GraphSAGE Single', 'Isolation Forest']
+
+    # Filter out models that don't exist in results_collector
+    available_models = []
+    available_labels = []
+    for model, label in zip(models, model_labels):
+        if model in results_collector:
+            available_models.append(model)
+            available_labels.append(label)
+
+    models = available_models
+    model_labels = available_labels
 
     # Define metrics to plot (all 9 metrics from calculate_all_metrics)
     metrics = ['accuracy', 'precision', 'recall', 'f1', 'macro_recall', 'macro_f1', 'auc', 'macro_auc', 'gmean']
@@ -209,8 +226,9 @@ def generate_mixhop_visualizations(results_collector, training_histories, test_y
 
     # Update the model list for MixHopConv models
     mixhop_results_collector = {}
+    mixhop_keys = ['IForest', 'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single', 'MixHop_Final_Ensemble']
     for key, value in results_collector.items():
-        if key in ['IForest', 'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single', 'MixHop_GCN_Bagging', 'MixHop_GAT_Bagging', 'MixHop_GIN_Bagging', 'MixHop_GraphSAGE_Bagging', 'MixHop_Final_Ensemble']:
+        if key in mixhop_keys:
             mixhop_results_collector[key] = value
 
     plot_individual_metrics(mixhop_results_collector, save_dir='results/mixhop_metrics')
