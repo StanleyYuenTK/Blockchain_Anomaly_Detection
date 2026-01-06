@@ -1,22 +1,12 @@
 """
-gnn_interim_mix_version.py
-
-Enhanced GNN framework version with MixHopConv for multi-hop learning
-Includes: MixHopConv + GCN, MixHopConv + GAT, MixHopConv + GIN, MixHopConv + GraphSAGE
-Ensemble + Bagging, Hyperopt (Bayesian Optimization)
-Focal Loss for class imbalance, GAN-based data augmentation, PyTorch Geometric MLP
-Isolation Forest Baseline for performance comparison
-
-Execute all functions with one click, no command line arguments needed
-Includes automatic baseline evaluation and performance comparison
+Student ID: 24027277d
+Name: Yuen Tsz Ki
 """
 
 import os
-import warnings
 import numpy as np
 import pandas as pd
 from collections import Counter
-import copy
 import random
 
 import torch
@@ -25,28 +15,37 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, MLP, MixHopConv
 
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from sklearn.metrics import f1_score, accuracy_score, classification_report, confusion_matrix, roc_auc_score, recall_score, precision_score
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.metrics import f1_score, accuracy_score, classification_report, roc_auc_score, recall_score, precision_score
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
 # Hyperopt imports
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
-import hyperopt
+from functools import partial
 
 # Visualization tools
-from visualization_tools import plot_confusion_matrix, plot_feature_visualization_2d, plot_training_curves, TrainingHistory, plot_model_comparison
+from visualization_tools import TrainingHistory, generate_mixhop_visualizations
 
-# Additional visualization imports for explain_model
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import networkx as nx
-from torch_geometric.utils import to_networkx
-import seaborn as sns
+def create_mixhop_model_configs(data, best_hidden_channels, best_num_heads, dropout_value):
+    """Create model parameter configurations for MixHop GNN models"""
+    base_config = {
+        'in_channels': data.x.size(1),
+        'hidden_channels': best_hidden_channels,
+        'out_channels': 2,
+        'dropout': dropout_value
+    }
 
-warnings.filterwarnings('ignore')
+    configs = {
+        'MixHop_GCN': base_config.copy(),
+        'MixHop_GIN': base_config.copy(),
+        'MixHop_GraphSAGE': base_config.copy(),
+        'MixHop_GAT': {
+            **base_config,
+            'num_heads': best_num_heads
+        }
+    }
+
+    return configs
 
 # -----------------------
 # Loss Functions
@@ -219,6 +218,15 @@ class MixHopGraphSAGEModel(BaseGNN):
 
         out = F.log_softmax(x, dim=1)
         return out
+
+
+# Model class mapping for cleaner code
+MODEL_CLASSES = {
+    'GCN': MixHopGCNModel,
+    'GAT': MixHopGATModel,
+    'GIN': MixHopGINModel,
+    'GraphSAGE': MixHopGraphSAGEModel
+}
 
 
 # -----------------------
@@ -703,7 +711,7 @@ class Trainer:
             'test_gmean': test_gmean
         }
 
-    def fit(self, epochs=100, reduction_method='pca'): #extract_features_after=False,
+    def fit(self, epochs=100):
         best_val_loss = float('inf')
         best_stats = None
 
@@ -738,12 +746,6 @@ class Trainer:
                       f"Val Loss: {stats['val_loss']:.4f}, Val F1: {stats['val_f1']:.4f}, "
                       f"Test F1: {stats['test_f1']:.4f}")
 
-        # # Feature extraction and visualization
-        # if extract_features_after:
-        #     print("\nExtracting features and performing visualization...")
-        #     extracted, reduced = perform_feature_extraction_and_reduction(
-        #         self.model, self.data, self.device, reduction_method=reduction_method
-        #     )
 
         return best_stats, self.history
 
@@ -810,68 +812,18 @@ class FinalEnsemble:
             return final_avg_probs
 
 
-# -----------------------
-# Feature Extraction
-# -----------------------
-
-@torch.no_grad()
-def extract_features(model, data, device, layer_idx=-1):
-    model.eval()
-    out = model(data, return_embed=True)
-    if isinstance(out, tuple):
-        _, embed = out
-    else:
-        embed = out
-    if isinstance(embed, dict):
-        embed = torch.cat([v for v in embed.values()], dim=1)
-    return embed.cpu().numpy()
-
-
-def reduce_dimension_pca(features, n_components=2):
-    pca = PCA(n_components=n_components, random_state=42)
-    reduced = pca.fit_transform(features)
-    return reduced
-
-
-def reduce_dimension_tsne(features, n_components=2, perplexity=30, n_iter=1000):
-    if features.shape[1] > 50:
-        pca = PCA(n_components=50, random_state=42)
-        features = pca.fit_transform(features)
-    tsne = TSNE(n_components=n_components, perplexity=perplexity, n_iter=n_iter, random_state=42, verbose=0)
-    reduced = tsne.fit_transform(features)
-    return reduced
-
-
-def perform_feature_extraction_and_reduction(model, data, device, reduction_method='pca', n_components=2, visualize=True, save_path=None):
-    extracted = extract_features(model, data, device)
-    if reduction_method.lower() == 'pca':
-        reduced = reduce_dimension_pca(extracted, n_components)
-        method_name = 'PCA'
-    else:
-        reduced = reduce_dimension_tsne(extracted, n_components)
-        method_name = 't-SNE'
-    if visualize and n_components == 2:
-        plot_feature_visualization_2d(reduced, data.y, title=f"{type(model).__name__} Feature Visualization", method=method_name, save_path=save_path)
-    return extracted, reduced
 
 
 # -----------------------
 # Hyperopt Objective Function
 # -----------------------
 
-def hyperopt_objective(params):
+def hyperopt_objective(data, device, params):
     """Hyperopt optimization objective function"""
     # Set random seeds for reproducibility
     torch.manual_seed(42)
     np.random.seed(42)
     random.seed(42)
-
-    # Load data
-    data = load_elliptic_data()
-
-    # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    data = data.to(device)
 
     # Hyperopt returns actual values, not indices
     model_name = params['model']
@@ -880,30 +832,18 @@ def hyperopt_objective(params):
     dropout = params['dropout']
     num_heads = params['num_heads']
 
+    # Create model using the mapping
+    model_class = MODEL_CLASSES.get(model_name, MixHopGCNModel)
     if model_name == 'GAT':
-        model = MixHopGATModel(
+        model = model_class(
             in_channels=data.x.size(1),
             hidden_channels=hidden_channels,
             out_channels=2,
             num_heads=num_heads,
             dropout=dropout
         )
-    elif model_name == 'GIN':
-        model = MixHopGINModel(
-            in_channels=data.x.size(1),
-            hidden_channels=hidden_channels,
-            out_channels=2,
-            dropout=dropout
-        )
-    elif model_name == 'GraphSAGE':
-        model = MixHopGraphSAGEModel(
-            in_channels=data.x.size(1),
-            hidden_channels=hidden_channels,
-            out_channels=2,
-            dropout=dropout
-        )
-    else:  # GCN
-        model = MixHopGCNModel(
+    else:
+        model = model_class(
             in_channels=data.x.size(1),
             hidden_channels=hidden_channels,
             out_channels=2,
@@ -1038,28 +978,16 @@ def run_full_pipeline():
 
     # Run optimization
     trials = Trials()
-    # Skip hyperopt for debugging - use default parameters
-    SKIP_HYPEROPT = False  # Set to True to skip hyperopt and use defaults
-
-    if SKIP_HYPEROPT:
-        # Use default parameters for debugging
-        best = {
-            'model': 0,  # GCN
-            'hidden_channels': 0,  # 64
-            'dropout': 0.3,
-            'num_layers': 0,  # 2
-            'lr': 0.001,
-            'num_heads': 0  # 4
-        }
-    else:
-        best = fmin(
-            hyperopt_objective,
-            space=space,
-            algo=tpe.suggest,
-            max_evals=1,  # 30 evaluations
-            trials=trials,
-            rstate=np.random.default_rng(42)
-        )
+    # Use partial to bind data and device to the objective function
+    objective_with_data = partial(hyperopt_objective, data, device)
+    best = fmin(
+        objective_with_data,
+        space=space,
+        algo=tpe.suggest,
+        max_evals=8,  # 30 evaluations
+        trials=trials,
+        rstate=np.random.default_rng(42)
+    )
 
     # Convert indices back to actual values (hp.choice returns indices, not values)
     best_model = MODEL_CHOICES[best['model']]
@@ -1117,44 +1045,15 @@ def run_full_pipeline():
     best_num_layers = min(max(best_num_layers, 2), 4)
     best_num_heads = min(max(best_num_heads, 4), 16)
 
-    single_model_configs = {
-        'MixHop_GCN': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'dropout': best['dropout']
-        },
-        'MixHop_GAT': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_heads': best_num_heads,
-            'dropout': best['dropout']
-        },
-        'MixHop_GIN': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'dropout': best['dropout']
-        },
-        'MixHop_GraphSAGE': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'dropout': best['dropout']
-        }
-    }
+    single_model_configs = create_mixhop_model_configs(
+        data, best_hidden_channels, best_num_heads, best['dropout']
+    )
 
     for model_name, params in single_model_configs.items():
         print(f"\nTraining single {model_name} model...")
-        if 'GCN' in model_name:
-            model_class = MixHopGCNModel
-        elif 'GAT' in model_name:
-            model_class = MixHopGATModel
-        elif 'GIN' in model_name:
-            model_class = MixHopGINModel
-        elif 'GraphSAGE' in model_name:
-            model_class = MixHopGraphSAGEModel
+        # Extract base model name (remove 'MixHop_' prefix)
+        base_name = model_name.replace('MixHop_', '')
+        model_class = MODEL_CLASSES[base_name]
 
         # Create and train single model
         single_model = model_class(**params)
@@ -1186,47 +1085,18 @@ def run_full_pipeline():
     print("\n6. Training bagging MixHopConv-enhanced GNN models...")
 
     # Create BaggingEnsemble combining MixHopConv-enhanced GCN, GAT, GIN, GraphSAGE
-    bagging_model_configs = {
-        'MixHop_GCN': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'dropout': best['dropout']
-        },
-        'MixHop_GAT': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'num_heads': best_num_heads,
-            'dropout': best['dropout']
-        },
-        'MixHop_GIN': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'dropout': best['dropout']
-        },
-        'MixHop_GraphSAGE': {
-            'in_channels': data.x.size(1),
-            'hidden_channels': best_hidden_channels,
-            'out_channels': 2,
-            'dropout': best['dropout']
-        }
-    }
+    bagging_model_configs = create_mixhop_model_configs(
+        data, best_hidden_channels, best_num_heads, best['dropout']
+    )
 
     # Train four ensemble models
     ensemble_models = {}
     for model_name, params in bagging_model_configs.items():
         print(f"\nTraining {model_name} Bagging Ensemble...")
 
-        if 'GCN' in model_name:
-            model_class = MixHopGCNModel
-        elif 'GAT' in model_name:
-            model_class = MixHopGATModel
-        elif 'GIN' in model_name:
-            model_class = MixHopGINModel
-        elif 'GraphSAGE' in model_name:
-            model_class = MixHopGraphSAGEModel
+        # Extract base model name (remove 'MixHop_' prefix)
+        base_name = model_name.replace('MixHop_', '')
+        model_class = MODEL_CLASSES[base_name]
 
         ensemble = BaggingModel(
             model_class=model_class,
@@ -1298,106 +1168,8 @@ def run_full_pipeline():
     # ========================================================================
     # 8. Generate visualizations and training curves
     # ========================================================================
-    print("\n8. Generating visualizations and training curves...")
 
-    os.makedirs('results', exist_ok=True)
-
-    # Plot confusion matrix
-    plot_confusion_matrix(test_y_true, test_y_pred, model_name='MixHopConv Final Ensemble Model',
-                         save_path='results/mixhop_confusion_matrix.png')
-
-    # Plot individual metric charts
-    print("Generating individual metric comparison charts...")
-    from visualization_tools import plot_individual_metrics
-
-    # Update the model list for MixHopConv models
-    mixhop_results_collector = {}
-    for key, value in results_collector.items():
-        if key in ['IForest', 'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single', 'MixHop_GCN_Bagging', 'MixHop_GAT_Bagging', 'MixHop_GIN_Bagging', 'MixHop_GraphSAGE_Bagging', 'MixHop_Final_Ensemble']:
-            mixhop_results_collector[key] = value
-
-    plot_individual_metrics(mixhop_results_collector, save_dir='results/mixhop_metrics')
-
-    # Plot training curves for all models (showing fitting process)
-    print("Generating training curves for all models...")
-    import matplotlib.pyplot as plt
-
-    # Models to generate training curves for
-    models_to_plot = [
-        'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single',
-        'MixHop_GCN_Bagging', 'MixHop_GAT_Bagging', 'MixHop_GIN_Bagging', 'MixHop_GraphSAGE_Bagging'
-    ]
-
-    for model_key in models_to_plot:
-        if model_key in training_histories and training_histories[model_key] is not None:
-            history = training_histories[model_key]
-            model_name = model_key.replace('MixHop_', '').replace('_', ' ')
-
-            epochs = history.history['epoch']
-            train_losses = history.history['train_loss']
-            val_losses = history.history['val_loss']
-            val_f1_scores = history.history['val_f1']
-            test_f1_scores = history.history['test_f1']
-
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-            fig.suptitle(f'{model_name} Training Process', fontsize=16, fontweight='bold')
-
-            # Loss curves
-            ax1.plot(epochs, train_losses, label='Training Loss', linewidth=2, color='#e74c3c', alpha=0.8)
-            ax1.plot(epochs, val_losses, label='Validation Loss', linewidth=2, color='#3498db', alpha=0.8)
-            ax1.set_xlabel('Epoch', fontsize=12)
-            ax1.set_ylabel('Loss', fontsize=12)
-            ax1.set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
-
-            # F1 Score curves
-            ax2.plot(epochs, val_f1_scores, label='Validation F1', linewidth=2, color='#f39c12', alpha=0.8)
-            ax2.plot(epochs, test_f1_scores, label='Test F1', linewidth=2, color='#27ae60', alpha=0.8)
-            ax2.set_xlabel('Epoch', fontsize=12)
-            ax2.set_ylabel('F1 Score', fontsize=12)
-            ax2.set_title('Validation and Test F1 Score', fontsize=14, fontweight='bold')
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            filename = f'{model_key.lower()}_training_curves.png'
-            plt.savefig(f'results/{filename}', dpi=300, bbox_inches='tight')
-            plt.close()
-
-            print(f"Training curves saved to: results/{filename}")
-        else:
-            print(f"Warning: No training history available for {model_key}")
-
-    # Create a summary plot for the final ensemble (no training history, just final performance)
-    print("Generating ensemble performance summary...")
-    fig, ax = plt.subplots(figsize=(10, 6))
-
-    # Get final metrics for ensemble
-    ensemble_metrics = results_collector.get('MixHop_Final_Ensemble', {})
-    if ensemble_metrics:
-        metrics_names = ['f1', 'accuracy', 'precision', 'recall', 'macro_f1', 'auc']
-        metrics_values = [ensemble_metrics.get(m, 0) for m in metrics_names]
-
-        bars = ax.bar(metrics_names, metrics_values, color='#9b59b6', alpha=0.8, width=0.6)
-        ax.set_ylabel('Score', fontsize=12)
-        ax.set_title('MixHopConv Final Ensemble Performance Summary', fontsize=16, fontweight='bold')
-        ax.set_ylim(0, 1.0)
-        ax.grid(True, alpha=0.3, axis='y')
-
-        # Add value labels on bars
-        for bar, value in zip(bars, metrics_values):
-            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01,
-                   f'{value:.4f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
-
-        plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        plt.savefig('results/mixhop_final_ensemble_summary.png', dpi=300, bbox_inches='tight')
-        plt.close()
-        print("Ensemble summary saved to: results/mixhop_final_ensemble_summary.png")
-    else:
-        print("Warning: No ensemble metrics available for summary")
-
+    generate_mixhop_visualizations(results_collector, training_histories, test_y_true, test_y_pred)
 
     print("\n" + "="*70)
     print("Complete MixHopConv-enhanced pipeline execution finished!")

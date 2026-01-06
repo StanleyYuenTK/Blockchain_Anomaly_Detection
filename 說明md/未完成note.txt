@@ -7,13 +7,5 @@ STConv: 1D + GATConv +1D +MLP +Subtree
 MixHopConv + GAT (spatial) + MixHopConv
 max_evals
 
-
-
-
-
-
-
-
-
-
-
+3. GNN models
+https://github.com/pyg-team/pytorch_geometric/blob/master/torch_geometric/nn/models/basic_gnn.py
