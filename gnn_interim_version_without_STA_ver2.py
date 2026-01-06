@@ -578,6 +578,8 @@ class BaggingModel:
         # Create bags
         bags = self.create_balanced_bags(data, self.n_estimators)
 
+        last_training_history = None  # Store the last model's training history
+
         for i, bag_indices in enumerate(bags):
             print(f"Training bag {i+1}/{self.n_estimators}...")
 
@@ -589,22 +591,18 @@ class BaggingModel:
             bag_mask = torch.zeros_like(data.train_mask)
             bag_mask[bag_indices] = True
 
-            # Train sub-model
+            # Train sub-model with Trainer to get history
             optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-
-            for epoch in range(epochs):
-                model.train()
-                optimizer.zero_grad()
-                out = model(data)
-                loss = criterion(out[bag_mask], data.y[bag_mask])
-                loss.backward()
-                optimizer.step()
-
-                if (epoch + 1) % 20 == 0:
-                    print(f"Bag {i+1}, Epoch {epoch+1}/{epochs}, Loss: {loss.item():.4f}")
+            trainer = Trainer(model, data, device, optimizer, criterion)
+            best_stats, training_history = trainer.fit(epochs=epochs)
 
             self.models.append(model)
             self.bag_indices.append(bag_indices)
+
+            # Keep the last model's training history
+            last_training_history = training_history
+
+        return last_training_history
 
     def predict(self, data, device):
         """Make predictions"""
@@ -1257,8 +1255,11 @@ def run_full_pipeline():
             voting='soft'
         )
 
-        ensemble.fit(data, device, epochs=100)
+        bagging_history = ensemble.fit(data, device, epochs=100)
         ensemble_models[model_name] = ensemble
+
+        # Store training history for bagging model (using last model's history as representative)
+        training_histories[f'{model_name}_Bagging'] = bagging_history
 
         # Evaluate individual bagging ensemble for each model
         print(f"Evaluating {model_name} Bagging Ensemble individually...")
@@ -1330,48 +1331,85 @@ def run_full_pipeline():
     from visualization_tools import plot_individual_metrics
     plot_individual_metrics(results_collector, save_dir='results/metrics')
 
-    # Plot training curves for models (showing fitting process)
-    print("Generating training curves...")
+    # Plot training curves for all models (showing fitting process)
+    print("Generating training curves for all models...")
     import matplotlib.pyplot as plt
 
-    # Use real training data from GCN_Single model (as representative example)
-    if 'GCN_Single' in training_histories:
-        history = training_histories['GCN_Single']
+    # Models to generate training curves for
+    models_to_plot = [
+        'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single',
+        'GCN_Bagging', 'GAT_Bagging', 'GIN_Bagging', 'GraphSAGE_Bagging'
+    ]
 
-        epochs = history.history['epoch']
-        train_losses = history.history['train_loss']
-        val_losses = history.history['val_loss']
-        val_f1_scores = history.history['val_f1']
-        test_f1_scores = history.history['test_f1']
+    for model_key in models_to_plot:
+        if model_key in training_histories and training_histories[model_key] is not None:
+            history = training_histories[model_key]
+            model_name = model_key.replace('_', ' ')
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        fig.suptitle('GCN Model Training Process', fontsize=16, fontweight='bold')
+            epochs = history.history['epoch']
+            train_losses = history.history['train_loss']
+            val_losses = history.history['val_loss']
+            val_f1_scores = history.history['val_f1']
+            test_f1_scores = history.history['test_f1']
 
-        # Loss curves
-        ax1.plot(epochs, train_losses, label='Training Loss', linewidth=2, color='#e74c3c', alpha=0.8)
-        ax1.plot(epochs, val_losses, label='Validation Loss', linewidth=2, color='#3498db', alpha=0.8)
-        ax1.set_xlabel('Epoch', fontsize=12)
-        ax1.set_ylabel('Loss', fontsize=12)
-        ax1.set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
-        ax1.legend()
-        ax1.grid(True, alpha=0.3)
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+            fig.suptitle(f'{model_name} Training Process', fontsize=16, fontweight='bold')
 
-        # F1 Score curves
-        ax2.plot(epochs, val_f1_scores, label='Validation F1', linewidth=2, color='#f39c12', alpha=0.8)
-        ax2.plot(epochs, test_f1_scores, label='Test F1', linewidth=2, color='#27ae60', alpha=0.8)
-        ax2.set_xlabel('Epoch', fontsize=12)
-        ax2.set_ylabel('F1 Score', fontsize=12)
-        ax2.set_title('Validation and Test F1 Score', fontsize=14, fontweight='bold')
-        ax2.legend()
-        ax2.grid(True, alpha=0.3)
+            # Loss curves
+            ax1.plot(epochs, train_losses, label='Training Loss', linewidth=2, color='#e74c3c', alpha=0.8)
+            ax1.plot(epochs, val_losses, label='Validation Loss', linewidth=2, color='#3498db', alpha=0.8)
+            ax1.set_xlabel('Epoch', fontsize=12)
+            ax1.set_ylabel('Loss', fontsize=12)
+            ax1.set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
+            ax1.legend()
+            ax1.grid(True, alpha=0.3)
 
+            # F1 Score curves
+            ax2.plot(epochs, val_f1_scores, label='Validation F1', linewidth=2, color='#f39c12', alpha=0.8)
+            ax2.plot(epochs, test_f1_scores, label='Test F1', linewidth=2, color='#27ae60', alpha=0.8)
+            ax2.set_xlabel('Epoch', fontsize=12)
+            ax2.set_ylabel('F1 Score', fontsize=12)
+            ax2.set_title('Validation and Test F1 Score', fontsize=14, fontweight='bold')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            filename = f'{model_key.lower()}_training_curves.png'
+            plt.savefig(f'results/{filename}', dpi=300, bbox_inches='tight')
+            plt.close()
+
+            print(f"Training curves saved to: results/{filename}")
+        else:
+            print(f"Warning: No training history available for {model_key}")
+
+    # Create a summary plot for the final ensemble (no training history, just final performance)
+    print("Generating ensemble performance summary...")
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Get final metrics for ensemble
+    ensemble_metrics = results_collector.get('Final_Ensemble', {})
+    if ensemble_metrics:
+        metrics_names = ['f1', 'accuracy', 'precision', 'recall', 'macro_f1', 'auc']
+        metrics_values = [ensemble_metrics.get(m, 0) for m in metrics_names]
+
+        bars = ax.bar(metrics_names, metrics_values, color='#9b59b6', alpha=0.8, width=0.6)
+        ax.set_ylabel('Score', fontsize=12)
+        ax.set_title('Final Ensemble Performance Summary', fontsize=16, fontweight='bold')
+        ax.set_ylim(0, 1.0)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        # Add value labels on bars
+        for bar, value in zip(bars, metrics_values):
+            ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.01,
+                   f'{value:.4f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+        plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
-        plt.savefig('results/training_curves.png', dpi=300, bbox_inches='tight')
+        plt.savefig('results/final_ensemble_summary.png', dpi=300, bbox_inches='tight')
         plt.close()
-
-        print("Training curves saved to: results/training_curves.png")
+        print("Ensemble summary saved to: results/final_ensemble_summary.png")
     else:
-        print("Warning: No training history available for visualization")
+        print("Warning: No ensemble metrics available for summary")
 
 
     print("\n" + "="*60)
