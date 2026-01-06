@@ -571,9 +571,20 @@ class BaggingModel:
             model = self.model_class(**self.model_params)
             model = model.to(device)
 
-            # Create sub-dataset with only bag samples
-            bag_data = self._create_sub_dataset(data, bag_indices)
-            bag_data = bag_data.to(device)  # Move to the same device as the original data
+            # Create a custom dataset that uses bag samples for training but full validation set
+            bag_train_mask = torch.zeros(len(data.x), dtype=torch.bool)
+            bag_train_mask[bag_indices] = True
+
+            # Create modified data object with custom training mask
+            bag_data = Data(
+                x=data.x,
+                y=data.y,
+                edge_index=data.edge_index,
+                train_mask=bag_train_mask,  # Only bag samples for training
+                val_mask=data.val_mask,     # Full validation set
+                test_mask=data.test_mask    # Full test set (though we won't use it)
+            )
+            bag_data = bag_data.to(device)
 
             # Train sub-model with Trainer to get history
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -588,56 +599,6 @@ class BaggingModel:
 
         return last_training_history
 
-    def _create_sub_dataset(self, data, bag_indices):
-        """Create a subset of the data containing only the specified bag indices"""
-        # Create masks for the subset
-        bag_train_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
-        bag_val_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
-        bag_test_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
-
-        # Map original indices to subset indices
-        index_map = {orig_idx: new_idx for new_idx, orig_idx in enumerate(bag_indices)}
-
-        # For each original mask, find which bag indices belong to which set
-        original_train_indices = torch.where(data.train_mask)[0].cpu().numpy()
-        original_val_indices = torch.where(data.val_mask)[0].cpu().numpy()
-        original_test_indices = torch.where(data.test_mask)[0].cpu().numpy()
-
-        for orig_idx in bag_indices:
-            if orig_idx in original_train_indices:
-                bag_train_mask[index_map[orig_idx]] = True
-            elif orig_idx in original_val_indices:
-                bag_val_mask[index_map[orig_idx]] = True
-            elif orig_idx in original_test_indices:
-                bag_test_mask[index_map[orig_idx]] = True
-
-        # Create subset data
-        subset_data = Data(
-            x=data.x[bag_indices],
-            y=data.y[bag_indices],
-            edge_index=self._remap_edge_index(data.edge_index, index_map),
-            train_mask=bag_train_mask,
-            val_mask=bag_val_mask,
-            test_mask=bag_test_mask
-        )
-
-        return subset_data
-
-    def _remap_edge_index(self, edge_index, index_map):
-        """Remap edge indices to subset indices, keeping only edges within the subset"""
-        edge_index_np = edge_index.cpu().numpy()
-        remapped_edges = []
-
-        for i in range(edge_index_np.shape[1]):
-            src, dst = edge_index_np[0, i], edge_index_np[1, i]
-            if src in index_map and dst in index_map:
-                remapped_edges.append([index_map[src], index_map[dst]])
-
-        if remapped_edges:
-            return torch.tensor(remapped_edges, dtype=torch.long).t()
-        else:
-            # If no edges remain, return empty edge index
-            return torch.empty(2, 0, dtype=torch.long)
 
     def predict(self, data, device):
         """Make predictions"""
