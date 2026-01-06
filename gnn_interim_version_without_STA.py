@@ -1066,6 +1066,9 @@ def run_full_pipeline():
         'Final_Ensemble': {}
     }
 
+    # Define test labels for evaluation (needed for bagging evaluation)
+    test_y_true = data.y[data.test_mask].cpu().numpy()
+
     # Hyperopt hyperparameter optimization
     print("\n2. Starting Hyperopt hyperparameter optimization...")
 
@@ -1208,9 +1211,6 @@ def run_full_pipeline():
     print("\n4. Creating final ensemble model (Bagging GCN + Bagging GAT + Bagging GIN + Bagging GraphSAGE)...")
 
     final_ensemble = FinalEnsemble(ensemble_models)
-
-    # Define test labels for evaluation
-    test_y_true = data.y[data.test_mask].cpu().numpy()
 
     # Train and evaluate individual models (without bagging)
     print("\n3.5. Training individual models for baseline comparison...")
