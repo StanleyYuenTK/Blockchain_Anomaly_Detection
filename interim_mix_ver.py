@@ -85,12 +85,12 @@ class MixHopGCNModel(BaseGNN):
     """GCN with MixHopConv enhancement: MixHopConv + GCN + MixHopConv"""
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(MixHopGCNModel, self).__init__()
-        # MixHopConv for multi-hop neighborhood aggregation
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1])
+        # MixHopConv for multi-hop neighborhood aggregation (0-hop: self, 1-hop: neighbors, 2-hop: extended neighbors)
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0, 1, 2])
         # GCN for feature learning
         self.gcn = GCNConv(hidden_channels, hidden_channels)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0, 1, 2])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -117,12 +117,12 @@ class MixHopGATModel(BaseGNN):
     """GAT with MixHopConv enhancement: MixHopConv + GAT + MixHopConv"""
     def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, dropout=0.5):
         super(MixHopGATModel, self).__init__()
-        # MixHopConv for multi-hop neighborhood aggregation
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1])
+        # MixHopConv for multi-hop neighborhood aggregation (0-hop: self, 1-hop: neighbors, 2-hop: extended neighbors)
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0, 1, 2])
         # GAT for attention-based feature learning
         self.gat = GATConv(hidden_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels * num_heads, out_channels, powers=[1])
+        self.mixhop2 = MixHopConv(hidden_channels * num_heads, out_channels, powers=[0, 1, 2])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -149,12 +149,12 @@ class MixHopGINModel(BaseGNN):
     """GIN with MixHopConv enhancement: MixHopConv + GIN + MixHopConv"""
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(MixHopGINModel, self).__init__()
-        # MixHopConv for multi-hop neighborhood aggregation
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1])
+        # MixHopConv for multi-hop neighborhood aggregation (0-hop: self, 1-hop: neighbors, 2-hop: extended neighbors)
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0, 1, 2])
         # GIN for graph isomorphism learning
         self.gin = GINConv(MLP([hidden_channels, hidden_channels, hidden_channels], dropout=dropout))
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0, 1, 2])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -181,12 +181,12 @@ class MixHopGraphSAGEModel(BaseGNN):
     """GraphSAGE with MixHopConv enhancement: MixHopConv + GraphSAGE + MixHopConv"""
     def __init__(self, in_channels, hidden_channels, out_channels, aggr='mean', dropout=0.5):
         super(MixHopGraphSAGEModel, self).__init__()
-        # MixHopConv for multi-hop neighborhood aggregation
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1])
+        # MixHopConv for multi-hop neighborhood aggregation (0-hop: self, 1-hop: neighbors, 2-hop: extended neighbors)
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0, 1, 2])
         # GraphSAGE for neighborhood sampling and aggregation
         self.sage = SAGEConv(hidden_channels, hidden_channels, aggr=aggr)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0, 1, 2])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -573,6 +573,7 @@ class BaggingModel:
 
             # Create sub-dataset with only bag samples
             bag_data = self._create_sub_dataset(data, bag_indices)
+            bag_data = bag_data.to(device)  # Move to the same device as the original data
 
             # Train sub-model with Trainer to get history
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -708,6 +709,15 @@ class Trainer:
         val_specificity = recall_score(val_y_true, val_y_pred, pos_label=0, zero_division=0)
         val_gmean = np.sqrt(val_sensitivity * val_specificity) if val_sensitivity * val_specificity > 0 else 0
 
+        # Validation set AUC (using probabilities)
+        val_probs = torch.exp(out[self.data.val_mask]).cpu().numpy()
+        try:
+            val_auc = roc_auc_score(val_y_true, val_probs[:, 1])
+            val_macro_auc = val_auc  # For binary classification, macro AUC equals regular AUC
+        except:
+            val_auc = float('nan')
+            val_macro_auc = float('nan')
+
         # Test set evaluation
         test_y_true = self.data.y[self.data.test_mask].cpu().numpy()
         test_y_pred = pred[self.data.test_mask].cpu().numpy()
@@ -741,6 +751,8 @@ class Trainer:
             'val_acc': val_acc,
             'val_macro_recall': val_macro_recall,
             'val_macro_f1': val_macro_f1,
+            'val_auc': val_auc,
+            'val_macro_auc': val_macro_auc,
             'val_gmean': val_gmean,
             'test_f1': test_f1,
             'test_acc': test_acc,
@@ -775,7 +787,7 @@ class Trainer:
                 test_gmean=stats['test_gmean'],
                 val_macro_f1=stats['val_macro_f1'],
                 test_macro_f1=stats['test_macro_f1'],
-                val_macro_auc=stats['test_macro_auc'],  # For binary classification, macro AUC equals regular AUC
+                val_macro_auc=stats['val_macro_auc'],
                 test_macro_auc=stats['test_macro_auc']
             )
 

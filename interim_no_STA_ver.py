@@ -187,10 +187,10 @@ class GINModel(BaseGNN):
 # GAN Data Augmentation
 # -----------------------
 
-class Generator(nn.Module):
+class GAN_Generator(nn.Module):
     """Simple GAN Generator for data augmentation"""
     def __init__(self, input_dim, hidden_dim, output_dim):
-        super(Generator, self).__init__()
+        super(GAN_Generator, self).__init__()
         self.model = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -206,10 +206,10 @@ class Generator(nn.Module):
         return self.model(z)
 
 
-class Discriminator(nn.Module):
+class GAN_Discriminator(nn.Module):
     """Simple GAN Discriminator for data augmentation"""
     def __init__(self, input_dim, hidden_dim):
-        super(Discriminator, self).__init__()
+        super(GAN_Discriminator, self).__init__()
         self.model = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LeakyReLU(0.2),
@@ -251,8 +251,8 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
 
     # Initialize GAN models
     feature_dim = data.x.size(1)
-    generator = Generator(latent_dim, hidden_dim, feature_dim).to(device)
-    discriminator = Discriminator(feature_dim, hidden_dim).to(device)
+    generator = GAN_Generator(latent_dim, hidden_dim, feature_dim).to(device)
+    discriminator = GAN_Discriminator(feature_dim, hidden_dim).to(device)
 
     # Optimizers
     g_optimizer = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
@@ -549,6 +549,7 @@ class BaggingModel:
 
             # Create sub-dataset with only bag samples
             bag_data = self._create_sub_dataset(data, bag_indices)
+            bag_data = bag_data.to(device)  # Move to the same device as the original data
 
             # Train sub-model with Trainer to get history
             optimizer = torch.optim.Adam(model.parameters(), lr=lr)
