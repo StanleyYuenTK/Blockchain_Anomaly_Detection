@@ -471,48 +471,109 @@ class IsolationForestBaseline:
 # -----------------------
 
 def load_elliptic_data(dataset_dir='../Dataset'):
-    # print(f"Current working directory: {os.getcwd()}")  # Debug: Current working directory
-    # print(f"Loading data from: {dataset_dir}")  # Debug: Dataset directory
+    """
+    Load Elliptic Bitcoin transaction dataset.
+
+    Dataset Description:
+    - 203,769 nodes (transactions), 234,355 edges
+    - Each node has 166 features (after excluding txId, timestep, and class)
+    - Labels: '2'/'licit' -> 0 (Legal), '1'/'illicit' -> 1 (Illegal), 'unknown' -> -1
+    - Time steps: 1-49 (about 2 weeks each)
+    - Known labels: 4,545 illicit (2%), 42,019 licit (21%), rest unknown
+
+    Returns:
+        PyTorch Geometric Data object with x, y, edge_index, and masks
+    """
+    print("Loading Elliptic dataset...")
+
     classes_path = os.path.join(dataset_dir, 'elliptic_txs_classes.csv')
     edgelist_path = os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv')
     features_path = os.path.join(dataset_dir, 'elliptic_txs_features.csv')
 
-    # print(f"Full paths:")  # Debug: File paths
-    # print(f"  classes: {classes_path}")
-    # print(f"  edgelist: {edgelist_path}")
-    # print(f"  features: {features_path}")
-    # print(f"Files found: classes={os.path.exists(classes_path)}, edgelist={os.path.exists(edgelist_path)}, features={os.path.exists(features_path)}")  # Debug: File existence check
-
+    # Load data
     classes_df = pd.read_csv(classes_path)
     edgelist_df = pd.read_csv(edgelist_path)
     features_df = pd.read_csv(features_path, header=None)
-    features_df.rename(columns={0: 'txId'}, inplace=True)
+
+    # Rename columns for clarity
+    features_df.rename(columns={0: 'txId', 1: 'timestep'}, inplace=True)
+    features_df.columns = ['txId', 'timestep'] + [f'feature_{i}' for i in range(2, features_df.shape[1])]
+
+    # Merge features with classes
     nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
+
+    # Extract features (exclude txId, timestep, and class columns)
+    # Should result in 166 features as per dataset description
     feature_columns = nodes_df.columns[2:-1]  # Skip txId (0), timestep (1), and class (last)
     features = nodes_df[feature_columns].values
     x = torch.tensor(features, dtype=torch.float)
 
-    print(f"Loaded {x.size(0)} nodes with {x.size(1)} features")
+    print(f"Loaded {x.size(0)} nodes with {x.size(1)} features (expected: 166)")
 
-    labels = nodes_df['class'].apply(lambda c: 1 if c == '2' else (0 if c == '1' else -1))
+    # Convert labels: '2'/'licit' -> 0 (Legal), '1'/'illicit' -> 1 (Illegal), else -> -1 (Unknown)
+    labels = nodes_df['class'].apply(lambda c: 0 if c == '2' else (1 if c == '1' else -1))
     y = torch.tensor(labels.values, dtype=torch.long)
+
+    # Print label statistics
+    total_nodes = len(y)
+    legal_count = (y == 0).sum().item()
+    illicit_count = (y == 1).sum().item()
+    unknown_count = (y == -1).sum().item()
+
+    print(f"Label distribution:")
+    print(f"  Legal (class 0): {legal_count} nodes ({legal_count/total_nodes*100:.1f}%)")
+    print(f"  Illicit (class 1): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
+    print(f"  Unknown (class -1): {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
+
+    # Build transaction ID mapping
     tx_ids = nodes_df['txId'].values
     tx_id_map = {tx_id: i for i, tx_id in enumerate(tx_ids)}
+
+    # Build edge index
     source_indices = []
     target_indices = []
     for _, row in edgelist_df.iterrows():
         src = row['txId1'] if 'txId1' in edgelist_df.columns else row.iloc[0]
         tgt = row['txId2'] if 'txId2' in edgelist_df.columns else row.iloc[1]
         if src in tx_id_map and tgt in tx_id_map:
-            source_indices.append(tx_id_map[src]); target_indices.append(tx_id_map[tgt])
+            source_indices.append(tx_id_map[src])
+            target_indices.append(tx_id_map[tgt])
+
     edge_index = torch.tensor([source_indices, target_indices], dtype=torch.long)
-    timesteps = torch.tensor(nodes_df.iloc[:, 1].values, dtype=torch.long)
+    print(f"Graph structure: {edge_index.size(1)} edges")
+
+    # Extract timesteps
+    timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
+
+    # Create PyTorch Geometric Data object
     data = Data(x=x, y=y, edge_index=edge_index)
     data.timesteps = timesteps
-    known_mask = y != -1
+
+    # Create masks for train/val/test splits
+    # Time-based split: timesteps 1-34 (train), 35-41 (val), 42-49 (test)
+    known_mask = y != -1  # Only use known labels
     data.train_mask = (timesteps < 35) & known_mask
     data.val_mask = (timesteps >= 35) & (timesteps < 42) & known_mask
     data.test_mask = (timesteps >= 42) & known_mask
+
+    # Print split statistics
+    train_count = data.train_mask.sum().item()
+    val_count = data.val_mask.sum().item()
+    test_count = data.test_mask.sum().item()
+
+    print(f"Data splits (known labels only):")
+    print(f"  Train: {train_count} nodes (timesteps 1-34)")
+    print(f"  Validation: {val_count} nodes (timesteps 35-41)")
+    print(f"  Test: {test_count} nodes (timesteps 42-49)")
+
+    # Print class distribution in test set
+    test_labels = y[data.test_mask]
+    test_legal = (test_labels == 0).sum().item()
+    test_illicit = (test_labels == 1).sum().item()
+    print(f"Test set class distribution:")
+    print(f"  Legal: {test_legal} ({test_legal/test_count*100:.1f}%)")
+    print(f"  Illicit: {test_illicit} ({test_illicit/test_count*100:.1f}%)")
+
     return data
 
 
