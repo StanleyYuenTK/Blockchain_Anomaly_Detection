@@ -4,7 +4,6 @@ Name: Yuen Tsz Ki
 """
 
 import os
-import warnings
 import numpy as np
 import pandas as pd
 from collections import Counter
@@ -16,7 +15,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, MLP
 
-from sklearn.metrics import f1_score, accuracy_score, classification_report, confusion_matrix, roc_auc_score, recall_score, precision_score
+from sklearn.metrics import f1_score, accuracy_score, classification_report, roc_auc_score, recall_score, precision_score
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
@@ -480,129 +479,6 @@ def load_elliptic_data(dataset_dir='../Dataset'):
     return data
 
 
-# -----------------------
-# Ensemble Model with Bagging
-# -----------------------
-
-class BaggingModel:
-    """
-    Ensemble learning framework with Bagging for GNNs that maintains class imbalance ratios.
-
-    This implementation creates balanced bootstrap samples that preserve the original
-    class distribution, then trains individual GNN models on each sample. Final
-    predictions are made using soft voting (averaging probabilities).
-
-    Attributes:
-        model_class: The GNN model class to ensemble
-        model_params: Parameters for initializing individual models
-        n_estimators: Number of base models in the ensemble
-        voting: Voting strategy ('soft' for probability averaging)
-        models: List of trained base models
-        bag_indices: List of indices used for each bag
-    """
-    def __init__(self, model_class, model_params, n_estimators=5, voting='soft'):
-        self.model_class = model_class
-        self.model_params = model_params
-        self.n_estimators = n_estimators
-        self.voting = voting
-        self.models = []
-        self.bag_indices = []  # Record training indices for each bag
-
-    def create_balanced_bags(self, data):
-        """Create bags that maintain class imbalance ratio"""
-        train_idx = torch.where(data.train_mask)[0].cpu().numpy()
-        train_labels = data.y[train_idx].cpu().numpy()
-
-        # Calculate class ratios in original training set
-        unique_labels, counts = np.unique(train_labels, return_counts=True)
-        label_ratios = counts / len(train_labels)
-
-        bags = []
-        for _ in range(self.n_estimators):
-            bag_indices = []
-            for label, ratio in zip(unique_labels, label_ratios):
-                label_indices = train_idx[train_labels == label]
-                n_samples = max(1, int(len(label_indices) * ratio))
-                # Bootstrap sampling (with replacement)
-                sampled_indices = np.random.choice(label_indices, size=n_samples, replace=True)
-                bag_indices.extend(sampled_indices)
-            bags.append(np.array(bag_indices))
-
-        return bags
-
-    def fit(self, data, device, epochs=100, criterion=None, lr=0.01):
-        """Train ensemble model"""
-        if criterion is None:
-            criterion = nn.NLLLoss()
-
-        # Create bags
-        bags = self.create_balanced_bags(data)
-
-        last_training_history = None  # Store the last model's training history
-
-        for i, bag_indices in enumerate(bags):
-            print(f"Training bag {i+1}/{self.n_estimators}...")
-
-            # Create sub-model
-            model = self.model_class(**self.model_params)
-            model = model.to(device)
-
-            # Create a custom dataset that uses bag samples for training but full validation set
-            bag_train_mask = torch.zeros(len(data.x), dtype=torch.bool)
-            bag_train_mask[bag_indices] = True
-
-            # Create modified data object with custom training mask
-            bag_data = Data(
-                x=data.x,
-                y=data.y,
-                edge_index=data.edge_index,
-                train_mask=bag_train_mask,  # Only bag samples for training
-                val_mask=data.val_mask,     # Full validation set
-                test_mask=data.test_mask    # Full test set (though we won't use it)
-            )
-            bag_data = bag_data.to(device)
-
-            # Train sub-model with Trainer to get history
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-            trainer = Trainer(model, bag_data, device, optimizer, criterion)
-            best_stats, training_history = trainer.fit(epochs=epochs, include_test=False)
-
-            self.models.append(model)
-            self.bag_indices.append(bag_indices)
-
-            # Keep the last model's training history
-            last_training_history = training_history
-
-        return last_training_history
-
-
-    def predict(self, data, device):
-        """Make predictions"""
-        all_predictions = []
-        all_probs = []
-
-        for model in self.models:
-            model.eval()
-            with torch.no_grad():
-                output = model(data)
-                probs = torch.exp(output)
-                preds = output.argmax(dim=1)
-                all_predictions.append(preds.cpu().numpy())
-                all_probs.append(probs.cpu().numpy())
-
-        if self.voting == 'soft':
-            avg_probs = np.mean(all_probs, axis=0)
-            ensemble_pred = np.argmax(avg_probs, axis=1)
-        else:
-            all_predictions = np.array(all_predictions)
-            ensemble_pred = []
-            for i in range(all_predictions.shape[1]):
-                votes = all_predictions[:, i]
-                ensemble_pred.append(Counter(votes).most_common(1)[0][0])
-            ensemble_pred = np.array(ensemble_pred)
-
-        return ensemble_pred
-
 
 # -----------------------
 # Trainer Class
@@ -750,28 +626,22 @@ class Trainer:
 
 
 class FinalEnsemble:
-    """Final ensemble combining multiple model ensembles"""
+    """Final ensemble combining multiple single models"""
     def __init__(self, models):
-        self.models = models  # ensemble_models dict
+        self.models = models  # dict of single trained models
 
     def predict(self, data, device, test_only=False):
         all_predictions = []
         all_probs = []
 
-        for model_name, ensemble in self.models.items():
-            pred = ensemble.predict(data, device)
-            all_predictions.append(pred)
-
-            # Calculate average probabilities (soft voting)
-            probs_list = []
-            for sub_model in ensemble.models:
-                sub_model.eval()
-                with torch.no_grad():
-                    output = sub_model(data)
-                    probs = torch.exp(output).cpu().numpy()
-                    probs_list.append(probs)
-            avg_probs = np.mean(probs_list, axis=0)
-            all_probs.append(avg_probs)
+        for model_name, model in self.models.items():
+            model.eval()
+            with torch.no_grad():
+                output = model(data)
+                probs = torch.exp(output).cpu().numpy()
+                pred = np.argmax(probs, axis=1)
+                all_predictions.append(pred)
+                all_probs.append(probs)
 
         # Final soft voting
         final_avg_probs = np.mean(all_probs, axis=0)
@@ -785,20 +655,15 @@ class FinalEnsemble:
             return final_pred
 
     def predict_proba(self, data, device, test_only=False):
-        """Return averaged probabilities from all ensemble models"""
+        """Return averaged probabilities from all models"""
         all_probs = []
 
-        for model_name, ensemble in self.models.items():
-            # Calculate average probabilities (soft voting) for each model type
-            probs_list = []
-            for sub_model in ensemble.models:
-                sub_model.eval()
-                with torch.no_grad():
-                    output = sub_model(data)
-                    probs = torch.exp(output).cpu().numpy()
-                    probs_list.append(probs)
-            avg_probs = np.mean(probs_list, axis=0)
-            all_probs.append(avg_probs)
+        for model_name, model in self.models.items():
+            model.eval()
+            with torch.no_grad():
+                output = model(data)
+                probs = torch.exp(output).cpu().numpy()
+                all_probs.append(probs)
 
         # Final soft voting across all model types
         final_avg_probs = np.mean(all_probs, axis=0)
@@ -1003,7 +868,7 @@ def run_full_pipeline():
         objective_with_data,
         space=space,
         algo=tpe.suggest,
-        max_evals=1,  # 30 evaluations
+        max_evals=1,  # set 1 for my computer performance
         trials=trials,
         rstate=np.random.default_rng(42)
     )
@@ -1040,10 +905,6 @@ def run_full_pipeline():
         'GAT_Single': {},
         'GIN_Single': {},
         'GraphSAGE_Single': {},
-        'GCN_Bagging': {},
-        'GAT_Bagging': {},
-        'GIN_Bagging': {},
-        'GraphSAGE_Bagging': {},
         'Final_Ensemble': {}
     }
 
@@ -1055,6 +916,9 @@ def run_full_pipeline():
     single_model_configs = create_model_configs(
         data, best_hidden_channels, best_num_heads, best['dropout']
     )
+
+    # Store trained single models for final ensemble
+    trained_single_models = {}
 
     for model_name, params in single_model_configs.items():
         print(f"\nTraining single {model_name} model...")
@@ -1072,6 +936,9 @@ def run_full_pipeline():
         # Store training history
         training_histories[f'{model_name}_Single'] = training_history
 
+        # Store trained model for ensemble
+        trained_single_models[model_name] = single_model
+
         # Get predictions and probabilities
         single_model.eval()
         with torch.no_grad():
@@ -1085,57 +952,11 @@ def run_full_pipeline():
         print(f"{model_name} single model evaluation completed")
 
     # ========================================================================
-    # 6. Train bagging GNN models
+    # 6. Create and evaluate final ensemble model
     # ========================================================================
-    print("\n6. Training bagging GNN models...")
+    print("\n6. Creating and evaluating final ensemble model...")
 
-    # Create BaggingEnsemble combining GCN, GAT, GIN, GraphSAGE
-    bagging_model_configs = create_model_configs(
-        data, best_hidden_channels, best_num_heads, best['dropout']
-    )
-
-    # Train four ensemble models
-    ensemble_models = {}
-    for model_name, params in bagging_model_configs.items():
-        print(f"\nTraining {model_name} Bagging Ensemble...")
-
-        model_class = MODEL_CLASSES[model_name]
-
-        ensemble = BaggingModel(
-            model_class=model_class,
-            model_params=params,
-            n_estimators=5,
-            voting='soft'
-        )
-
-        bagging_history = ensemble.fit(data, device, epochs=100, lr=best['lr'])
-        ensemble_models[model_name] = ensemble
-
-        # Store training history for bagging model (using last model's history as representative)
-        training_histories[f'{model_name}_Bagging'] = bagging_history
-
-        # Evaluate individual bagging ensemble for each model
-        print(f"Evaluating {model_name} Bagging Ensemble individually...")
-        bagging_pred = ensemble.predict(data, device)
-        # Calculate average probabilities from bagging models
-        probs_list = []
-        for sub_model in ensemble.models:
-            sub_model.eval()
-            with torch.no_grad():
-                output = sub_model(data)
-                probs = torch.exp(output).cpu().numpy()
-                probs_list.append(probs)
-        bagging_avg_probs = np.mean(probs_list, axis=0)
-        bagging_pred_test = bagging_pred[data.test_mask.cpu().numpy()]
-        bagging_probs_test = bagging_avg_probs[data.test_mask.cpu().numpy()]
-        results_collector[f'{model_name}_Bagging'] = calculate_all_metrics(test_y_true, bagging_pred_test, bagging_probs_test)
-
-    # ========================================================================
-    # 7. Create and evaluate final ensemble model
-    # ========================================================================
-    print("\n7. Creating and evaluating final ensemble model...")
-
-    final_ensemble = FinalEnsemble(ensemble_models)
+    final_ensemble = FinalEnsemble(trained_single_models)
 
     # Evaluate final ensemble model
     test_y_pred = final_ensemble.predict(data, device, test_only=True)
@@ -1169,7 +990,7 @@ def run_full_pipeline():
     print(classification_report(test_y_true, test_y_pred, target_names=['Legal', 'Illegal'], zero_division=0))
 
     # ========================================================================
-    # 8. Generate visualizations and training curves
+    # 7. Generate visualizations and training curves
     # ========================================================================
     
     generate_standard_gnn_visualizations(results_collector, training_histories, test_y_true, test_y_pred)
