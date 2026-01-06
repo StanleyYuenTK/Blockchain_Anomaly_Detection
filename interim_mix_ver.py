@@ -82,21 +82,21 @@ class BaseGNN(nn.Module):
 
 
 class MixHopGCNModel(BaseGNN):
-    """GCN with MixHopConv enhancement: MixHopConv + GCN + MixHopConv"""
+    """GCN with MixHopConv enhancement: Initial transformation + GCN + Output refinement"""
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(MixHopGCNModel, self).__init__()
-        # MixHopConv for multi-hop neighborhood aggregation (0-hop: self, 1-hop: neighbors, 2-hop: extended neighbors)
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0, 1, 2])
+        # MixHopConv for initial feature transformation (using only 0-hop for dimension consistency)
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0])
         # GCN for feature learning
         self.gcn = GCNConv(hidden_channels, hidden_channels)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0, 1, 2])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
 
-        # Stage 1: Multi-hop neighborhood learning
+        # Stage 1: Initial feature transformation
         x = self.mixhop1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
@@ -106,7 +106,7 @@ class MixHopGCNModel(BaseGNN):
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 3: Final multi-hop integration
+        # Stage 3: Final output refinement
         x = self.mixhop2(x, edge_index)
 
         out = F.log_softmax(x, dim=1)
@@ -114,21 +114,21 @@ class MixHopGCNModel(BaseGNN):
 
 
 class MixHopGATModel(BaseGNN):
-    """GAT with MixHopConv enhancement: MixHopConv + GAT + MixHopConv"""
+    """GAT with MixHopConv enhancement: Initial transformation + GAT + Output refinement"""
     def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, dropout=0.5):
         super(MixHopGATModel, self).__init__()
-        # MixHopConv for multi-hop neighborhood aggregation (0-hop: self, 1-hop: neighbors, 2-hop: extended neighbors)
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0, 1, 2])
+        # MixHopConv for initial feature transformation (using only 0-hop for dimension consistency)
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0])
         # GAT for attention-based feature learning
         self.gat = GATConv(hidden_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels * num_heads, out_channels, powers=[0, 1, 2])
+        self.mixhop2 = MixHopConv(hidden_channels * num_heads, out_channels, powers=[0])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
 
-        # Stage 1: Multi-hop neighborhood learning
+        # Stage 1: Initial feature transformation
         x = self.mixhop1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
@@ -138,7 +138,7 @@ class MixHopGATModel(BaseGNN):
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 3: Final multi-hop integration
+        # Stage 3: Final output refinement
         x = self.mixhop2(x, edge_index)
 
         out = F.log_softmax(x, dim=1)
@@ -146,21 +146,21 @@ class MixHopGATModel(BaseGNN):
 
 
 class MixHopGINModel(BaseGNN):
-    """GIN with MixHopConv enhancement: MixHopConv + GIN + MixHopConv"""
+    """GIN with MixHopConv enhancement: Initial transformation + GIN + Output refinement"""
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(MixHopGINModel, self).__init__()
-        # MixHopConv for multi-hop neighborhood aggregation (0-hop: self, 1-hop: neighbors, 2-hop: extended neighbors)
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0, 1, 2])
+        # MixHopConv for initial feature transformation (using only 0-hop for dimension consistency)
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0])
         # GIN for graph isomorphism learning
         self.gin = GINConv(MLP([hidden_channels, hidden_channels, hidden_channels], dropout=dropout))
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0, 1, 2])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
 
-        # Stage 1: Multi-hop neighborhood learning
+        # Stage 1: Initial feature transformation
         x = self.mixhop1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
@@ -170,7 +170,7 @@ class MixHopGINModel(BaseGNN):
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 3: Final multi-hop integration
+        # Stage 3: Final output refinement
         x = self.mixhop2(x, edge_index)
 
         out = F.log_softmax(x, dim=1)
@@ -178,21 +178,21 @@ class MixHopGINModel(BaseGNN):
 
 
 class MixHopGraphSAGEModel(BaseGNN):
-    """GraphSAGE with MixHopConv enhancement: MixHopConv + GraphSAGE + MixHopConv"""
+    """GraphSAGE with MixHopConv enhancement: Initial transformation + GraphSAGE + Output refinement"""
     def __init__(self, in_channels, hidden_channels, out_channels, aggr='mean', dropout=0.5):
         super(MixHopGraphSAGEModel, self).__init__()
-        # MixHopConv for multi-hop neighborhood aggregation (0-hop: self, 1-hop: neighbors, 2-hop: extended neighbors)
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0, 1, 2])
+        # MixHopConv for initial feature transformation (using only 0-hop for dimension consistency)
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0])
         # GraphSAGE for neighborhood sampling and aggregation
         self.sage = SAGEConv(hidden_channels, hidden_channels, aggr=aggr)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0, 1, 2])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
 
-        # Stage 1: Multi-hop neighborhood learning
+        # Stage 1: Initial feature transformation
         x = self.mixhop1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
@@ -202,7 +202,7 @@ class MixHopGraphSAGEModel(BaseGNN):
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 3: Final multi-hop integration
+        # Stage 3: Final output refinement
         x = self.mixhop2(x, edge_index)
 
         out = F.log_softmax(x, dim=1)
@@ -477,7 +477,7 @@ def load_elliptic_data(dataset_dir='../Dataset'):
     Dataset Description:
     - 203,769 nodes (transactions), 234,355 edges
     - Each node has 166 features (after excluding txId, timestep, and class)
-    - Labels: '2'/'licit' -> 0 (Legal), '1'/'illicit' -> 1 (Illegal), 'unknown' -> -1
+    - Labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), 'unknown' -> -1
     - Time steps: 1-49 (about 2 weeks each)
     - Known labels: 4,545 illicit (2%), 42,019 licit (21%), rest unknown
 
@@ -510,20 +510,20 @@ def load_elliptic_data(dataset_dir='../Dataset'):
 
     print(f"Loaded {x.size(0)} nodes with {x.size(1)} features (expected: 166)")
 
-    # Convert labels: '2'/'licit' -> 0 (Legal), '1'/'illicit' -> 1 (Illegal), else -> -1 (Unknown)
+    # Convert labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), else -> -1 (Unknown)
     labels = nodes_df['class'].apply(lambda c: 0 if c == '2' else (1 if c == '1' else -1))
     y = torch.tensor(labels.values, dtype=torch.long)
 
     # Print label statistics
     total_nodes = len(y)
-    legal_count = (y == 0).sum().item()
+    licit_count = (y == 0).sum().item()
     illicit_count = (y == 1).sum().item()
     unknown_count = (y == -1).sum().item()
 
     print(f"Label distribution:")
-    print(f"  Legal (class 0): {legal_count} nodes ({legal_count/total_nodes*100:.1f}%)")
-    print(f"  Illicit (class 1): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
-    print(f"  Unknown (class -1): {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
+    print(f"class1 (Illicit): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
+    print(f"class2 (licit): {licit_count} nodes ({licit_count/total_nodes*100:.1f}%)")
+    print(f"class-1 (Unknown): {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
 
     # Build transaction ID mapping
     tx_ids = nodes_df['txId'].values
@@ -568,11 +568,11 @@ def load_elliptic_data(dataset_dir='../Dataset'):
 
     # Print class distribution in test set
     test_labels = y[data.test_mask]
-    test_legal = (test_labels == 0).sum().item()
+    test_licit = (test_labels == 0).sum().item()
     test_illicit = (test_labels == 1).sum().item()
     print(f"Test set class distribution:")
-    print(f"  Legal: {test_legal} ({test_legal/test_count*100:.1f}%)")
-    print(f"  Illicit: {test_illicit} ({test_illicit/test_count*100:.1f}%)")
+    print(f"  licit: {test_licit} ({test_licit/test_count*100:.1f}%)")
+    print(f"  illicit: {test_illicit} ({test_illicit/test_count*100:.1f}%)")
 
     return data
 
@@ -1086,7 +1086,7 @@ def run_full_pipeline():
     print(f"G-Mean: {ensemble_results['gmean']:.4f}")
 
     print("\nClassification Report:")
-    print(classification_report(test_y_true, test_y_pred, target_names=['Legal', 'Illegal'], zero_division=0))
+    print(classification_report(test_y_true, test_y_pred, target_names=['licit', 'illicit'], zero_division=0))
 
     # ========================================================================
     # 7. Generate visualizations and training curves
