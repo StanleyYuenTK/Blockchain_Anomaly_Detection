@@ -127,18 +127,15 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
     os.makedirs(save_dir, exist_ok=True)
 
     # Define the models to compare
-    models = ['Final_Ensemble', 'GCN_Bagging', 'GAT_Bagging', 'GIN_Bagging', 'GraphSAGE_Bagging',
-              'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single', 'IForest']
-    model_labels = ['Final Ensemble', 'GCN Bagging', 'GAT Bagging', 'GIN Bagging', 'GraphSAGE Bagging',
-                    'GCN Single', 'GAT Single', 'GIN Single', 'GraphSAGE Single', 'Isolation Forest']
+    models = ['Final_Ensemble', 'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single', 'IForest']
+    model_labels = ['Final Ensemble', 'GCN Single', 'GAT Single', 'GIN Single', 'GraphSAGE Single', 'Isolation Forest']
 
     # Define metrics to plot (all 9 metrics from calculate_all_metrics)
     metrics = ['accuracy', 'precision', 'recall', 'f1', 'macro_recall', 'macro_f1', 'auc', 'macro_auc', 'gmean']
     metric_labels = ['Accuracy', 'Precision', 'Recall', 'F1-score', 'Macro Recall', 'Macro F1', 'ROC-AUC', 'Macro AUC', 'G-Mean']
 
-    # Color palette for 10 models
-    colors = ['#2E86AB', '#A23B72', '#27AE60', '#E67E22', '#9B59B6', '#F24236', '#F5A623',
-              '#1ABC9C', '#34495E', '#E74C3C']
+    # Color palette for 6 models
+    colors = ['#2E86AB', '#A23B72', '#27AE60', '#E67E22', '#9B59B6', '#F24236']
     # Blue, Purple, Green, Orange, Magenta, Red, Yellow, Teal, Dark Blue, Bright Red
 
     # Create individual plots for each metric
@@ -326,8 +323,7 @@ def generate_standard_gnn_visualizations(results_collector, training_histories, 
 
     # Models to generate training curves for
     models_to_plot = [
-        'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single',
-        'GCN_Bagging', 'GAT_Bagging', 'GIN_Bagging', 'GraphSAGE_Bagging'
+        'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single'
     ]
 
     for model_key in models_to_plot:
