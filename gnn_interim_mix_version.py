@@ -24,13 +24,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, MLP, MixHopConv
-# try:
-#     from torch_geometric.nn import MixHopConv
-#     MIXHOP_AVAILABLE = True
-#     print("MixHopConv is available")
-# except ImportError:
-#     MIXHOP_AVAILABLE = False
-#     print("MixHopConv is not available in current PyTorch Geometric version")
 
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
@@ -885,71 +878,35 @@ def hyperopt_objective(params):
     dropout = params['dropout']
     num_heads = params['num_heads']
 
-    if MIXHOP_AVAILABLE:
-        if model_name == 'GAT':
-            model = MixHopGATModel(
-                in_channels=data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                num_heads=num_heads,
-                dropout=dropout
-            )
-        elif model_name == 'GIN':
-            model = MixHopGINModel(
-                in_channels=data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                dropout=dropout
-            )
-        elif model_name == 'GraphSAGE':
-            model = MixHopGraphSAGEModel(
-                in_channels=data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                dropout=dropout
-            )
-        else:  # GCN
-            model = MixHopGCNModel(
-                in_channels=data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                dropout=dropout
-            )
-    else:
-        # Fallback to original models if MixHopConv not available
-        if model_name == 'GAT':
-            model = GATModel(
-                in_channels=data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                num_heads=num_heads,
-                num_layers=num_layers,
-                dropout=dropout
-            )
-        elif model_name == 'GIN':
-            model = GINModel(
-                in_channels=data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                num_layers=num_layers,
-                dropout=dropout
-            )
-        elif model_name == 'GraphSAGE':
-            model = GraphSAGEModel(
-                in_channels=data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                num_layers=num_layers,
-                dropout=dropout
-            )
-        else:  # GCN
-            model = GCNModel(
-                in_channels=data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                num_layers=num_layers,
-                dropout=dropout
-            )
+    if model_name == 'GAT':
+        model = MixHopGATModel(
+            in_channels=data.x.size(1),
+            hidden_channels=hidden_channels,
+            out_channels=2,
+            num_heads=num_heads,
+            dropout=dropout
+        )
+    elif model_name == 'GIN':
+        model = MixHopGINModel(
+            in_channels=data.x.size(1),
+            hidden_channels=hidden_channels,
+            out_channels=2,
+            dropout=dropout
+        )
+    elif model_name == 'GraphSAGE':
+        model = MixHopGraphSAGEModel(
+            in_channels=data.x.size(1),
+            hidden_channels=hidden_channels,
+            out_channels=2,
+            dropout=dropout
+        )
+    else:  # GCN
+        model = MixHopGCNModel(
+            in_channels=data.x.size(1),
+            hidden_channels=hidden_channels,
+            out_channels=2,
+            dropout=dropout
+        )
 
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
@@ -958,7 +915,7 @@ def hyperopt_objective(params):
     trainer = Trainer(model, data, device, optimizer, criterion)
 
     # Train
-    best_stats = trainer.fit(epochs=50)  # Fewer training epochs to speed up optimization
+    best_stats, _ = trainer.fit(epochs=50)  # Fewer training epochs to speed up optimization, ignore history
 
     # Return negative F1 score (Hyperopt minimizes objective)
     return {
@@ -1023,10 +980,6 @@ def run_full_pipeline():
     print("Blockchain Anomaly Detection GNN Framework - MixHopConv Enhanced")
     print("=" * 70)
 
-    # Check MixHopConv availability
-    if not MIXHOP_AVAILABLE:
-        print("WARNING: MixHopConv is not available. Falling back to original GNN models.")
-        print("To use MixHopConv-enhanced models, please upgrade PyTorch Geometric.")
 
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -1193,13 +1146,13 @@ def run_full_pipeline():
     for model_name, params in single_model_configs.items():
         print(f"\nTraining single {model_name} model...")
         if 'GCN' in model_name:
-            model_class = MixHopGCNModel if MIXHOP_AVAILABLE else GCNModel
+            model_class = MixHopGCNModel
         elif 'GAT' in model_name:
-            model_class = MixHopGATModel if MIXHOP_AVAILABLE else GATModel
+            model_class = MixHopGATModel
         elif 'GIN' in model_name:
-            model_class = MixHopGINModel if MIXHOP_AVAILABLE else GINModel
+            model_class = MixHopGINModel
         elif 'GraphSAGE' in model_name:
-            model_class = MixHopGraphSAGEModel if MIXHOP_AVAILABLE else GraphSAGEModel
+            model_class = MixHopGraphSAGEModel
 
         # Create and train single model
         single_model = model_class(**params)
@@ -1265,13 +1218,13 @@ def run_full_pipeline():
         print(f"\nTraining {model_name} Bagging Ensemble...")
 
         if 'GCN' in model_name:
-            model_class = MixHopGCNModel if MIXHOP_AVAILABLE else GCNModel
+            model_class = MixHopGCNModel
         elif 'GAT' in model_name:
-            model_class = MixHopGATModel if MIXHOP_AVAILABLE else GATModel
+            model_class = MixHopGATModel
         elif 'GIN' in model_name:
-            model_class = MixHopGINModel if MIXHOP_AVAILABLE else GINModel
+            model_class = MixHopGINModel
         elif 'GraphSAGE' in model_name:
-            model_class = MixHopGraphSAGEModel if MIXHOP_AVAILABLE else GraphSAGEModel
+            model_class = MixHopGraphSAGEModel
 
         ensemble = BaggingModel(
             model_class=model_class,
