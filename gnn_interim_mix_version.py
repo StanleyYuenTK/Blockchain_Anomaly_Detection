@@ -98,11 +98,11 @@ class MixHopGCNModel(BaseGNN):
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(MixHopGCNModel, self).__init__()
         # MixHopConv for multi-hop neighborhood aggregation
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1, 2, 3])
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1])
         # GCN for feature learning
         self.gcn = GCNConv(hidden_channels, hidden_channels)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1, 2])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -130,11 +130,11 @@ class MixHopGATModel(BaseGNN):
     def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, dropout=0.5):
         super(MixHopGATModel, self).__init__()
         # MixHopConv for multi-hop neighborhood aggregation
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1, 2, 3])
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1])
         # GAT for attention-based feature learning
         self.gat = GATConv(hidden_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels * num_heads, out_channels, powers=[1, 2])
+        self.mixhop2 = MixHopConv(hidden_channels * num_heads, out_channels, powers=[1])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -162,11 +162,11 @@ class MixHopGINModel(BaseGNN):
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(MixHopGINModel, self).__init__()
         # MixHopConv for multi-hop neighborhood aggregation
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1, 2, 3])
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1])
         # GIN for graph isomorphism learning
         self.gin = GINConv(MLP([hidden_channels, hidden_channels, hidden_channels], dropout=dropout))
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1, 2])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
@@ -194,11 +194,11 @@ class MixHopGraphSAGEModel(BaseGNN):
     def __init__(self, in_channels, hidden_channels, out_channels, aggr='mean', dropout=0.5):
         super(MixHopGraphSAGEModel, self).__init__()
         # MixHopConv for multi-hop neighborhood aggregation
-        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1, 2, 3])
+        self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[1])
         # GraphSAGE for neighborhood sampling and aggregation
         self.sage = SAGEConv(hidden_channels, hidden_channels, aggr=aggr)
         # Final MixHopConv for output refinement
-        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1, 2])
+        self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[1])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
