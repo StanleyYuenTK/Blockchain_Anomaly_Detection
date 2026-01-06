@@ -304,17 +304,14 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
         noise = torch.randn_like(generated_features) * 0.1
         generated_features = generated_features + noise
 
-    # Move generated features back to CPU for concatenation if needed
-    generated_features = generated_features.cpu()
-
-    # Create new data with augmented samples
+    # Create new data with augmented samples (keep all tensors on the same device)
     new_x = torch.cat([data.x, generated_features], dim=0)
-    new_y = torch.cat([data.y, torch.ones(num_to_generate, dtype=torch.long)], dim=0)
+    new_y = torch.cat([data.y, torch.ones(num_to_generate, dtype=torch.long).to(device)], dim=0)
 
     # Create new masks (keep original train/val/test split, add new samples to training)
-    new_train_mask = torch.cat([data.train_mask, torch.ones(num_to_generate, dtype=torch.bool)], dim=0)
-    new_val_mask = torch.cat([data.val_mask, torch.zeros(num_to_generate, dtype=torch.bool)], dim=0)
-    new_test_mask = torch.cat([data.test_mask, torch.zeros(num_to_generate, dtype=torch.bool)], dim=0)
+    new_train_mask = torch.cat([data.train_mask, torch.ones(num_to_generate, dtype=torch.bool).to(device)], dim=0)
+    new_val_mask = torch.cat([data.val_mask, torch.zeros(num_to_generate, dtype=torch.bool).to(device)], dim=0)
+    new_test_mask = torch.cat([data.test_mask, torch.zeros(num_to_generate, dtype=torch.bool).to(device)], dim=0)
 
     # Create augmented data object
     augmented_data = Data(
