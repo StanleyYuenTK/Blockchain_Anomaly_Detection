@@ -60,19 +60,8 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
-        # Convert inputs to probabilities
-        if inputs.dim() > 2:
-            inputs = inputs.view(inputs.size(0), inputs.size(1), -1)  # (N, C, H, W) -> (N, C, H*W)
-            inputs = inputs.transpose(1, 2)    # (N, C, H*W) -> (N, H*W, C)
-            inputs = inputs.contiguous().view(-1, inputs.size(2))   # (N*H*W, C)
-
-        # Compute cross entropy loss
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-
-        # Get probabilities
         pt = torch.exp(-ce_loss)
-
-        # Compute focal loss
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
 
         if self.reduction == 'mean':
@@ -275,12 +264,9 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
     """Use GAN to generate additional illegal (class 1) samples"""
     print("Applying GAN-based data augmentation for illegal samples...")
 
-    # Move data to CPU for processing to avoid CUDA issues
-    data_cpu = data.cpu()
-
     # Extract illegal samples (class 1)
-    illegal_mask = (data_cpu.y == 1)
-    illegal_features = data_cpu.x[illegal_mask]
+    illegal_mask = (data.y == 1)
+    illegal_features = data.x[illegal_mask]
     num_illegal = illegal_features.size(0)
     num_to_generate = int(num_illegal * augment_ratio)
 
@@ -290,10 +276,10 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
 
     print(f"Found {num_illegal} illegal samples, will generate {num_to_generate} additional samples")
 
-    # Initialize GAN models on CPU to avoid CUDA issues
+    # Initialize GAN models
     feature_dim = data.x.size(1)
-    generator = Generator(latent_dim, hidden_dim, feature_dim)
-    discriminator = Discriminator(feature_dim, hidden_dim)
+    generator = Generator(latent_dim, hidden_dim, feature_dim).to(device)
+    discriminator = Discriminator(feature_dim, hidden_dim).to(device)
 
     # Optimizers
     g_optimizer = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
@@ -302,9 +288,9 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
     # Loss function
     criterion = nn.BCELoss()
 
-    # Training data for discriminator (on CPU)
-    real_labels = torch.ones(num_illegal, 1)
-    fake_labels = torch.zeros(num_illegal, 1)
+    # Training data for discriminator
+    real_labels = torch.ones(num_illegal, 1).to(device)
+    fake_labels = torch.zeros(num_illegal, 1).to(device)
 
     # Training loop
     for epoch in range(num_epochs):
@@ -316,7 +302,7 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
         d_loss_real = criterion(real_output, real_labels)
 
         # Fake samples
-        z = torch.randn(num_illegal, latent_dim)
+        z = torch.randn(num_illegal, latent_dim).to(device)
         fake_features = generator(z)
         fake_output = discriminator(fake_features.detach())
         d_loss_fake = criterion(fake_output, fake_labels)
@@ -338,34 +324,33 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
     # Generate new samples
     generator.eval()
     with torch.no_grad():
-        z = torch.randn(num_to_generate, latent_dim)
+        z = torch.randn(num_to_generate, latent_dim).to(device)
         generated_features = generator(z)
 
         # Add small noise to make samples more diverse
         noise = torch.randn_like(generated_features) * 0.1
         generated_features = generated_features + noise
 
-    # Create new data with augmented samples
-    new_x = torch.cat([data_cpu.x, generated_features], dim=0)
-    new_y = torch.cat([data_cpu.y, torch.ones(num_to_generate, dtype=torch.long)], dim=0)
+    # Create new data with augmented samples (keep all tensors on the same device)
+    new_x = torch.cat([data.x, generated_features], dim=0)
+    new_y = torch.cat([data.y, torch.ones(num_to_generate, dtype=torch.long).to(device)], dim=0)
 
     # Create new masks (keep original train/val/test split, add new samples to training)
-    new_train_mask = torch.cat([data_cpu.train_mask, torch.ones(num_to_generate, dtype=torch.bool)], dim=0)
-    new_val_mask = torch.cat([data_cpu.val_mask, torch.zeros(num_to_generate, dtype=torch.bool)], dim=0)
-    new_test_mask = torch.cat([data_cpu.test_mask, torch.zeros(num_to_generate, dtype=torch.bool)], dim=0)
+    new_train_mask = torch.cat([data.train_mask, torch.ones(num_to_generate, dtype=torch.bool).to(device)], dim=0)
+    new_val_mask = torch.cat([data.val_mask, torch.zeros(num_to_generate, dtype=torch.bool).to(device)], dim=0)
+    new_test_mask = torch.cat([data.test_mask, torch.zeros(num_to_generate, dtype=torch.bool).to(device)], dim=0)
 
     # Create augmented data object
     augmented_data = Data(
         x=new_x,
         y=new_y,
-        edge_index=data_cpu.edge_index,  # Keep original edges
+        edge_index=data.edge_index,  # Keep original edges
         train_mask=new_train_mask,
         val_mask=new_val_mask,
         test_mask=new_test_mask
     )
 
-    # Move augmented data back to the specified device
-    augmented_data = augmented_data.to(device)
+    # Augmented data is already on the correct device
 
     print(f"GAN augmentation completed: added {num_to_generate} synthetic illegal samples")
     return augmented_data
@@ -548,7 +533,7 @@ class BaggingModel:
         self.models = []
         self.bag_indices = []  # Record training indices for each bag
 
-    def create_balanced_bags(self, data, n_bags=5):
+    def create_balanced_bags(self, data):
         """Create bags that maintain class imbalance ratio"""
         train_idx = torch.where(data.train_mask)[0].cpu().numpy()
         train_labels = data.y[train_idx].cpu().numpy()
@@ -558,7 +543,7 @@ class BaggingModel:
         label_ratios = counts / len(train_labels)
 
         bags = []
-        for _ in range(n_bags):
+        for _ in range(self.n_estimators):
             bag_indices = []
             for label, ratio in zip(unique_labels, label_ratios):
                 label_indices = train_idx[train_labels == label]
@@ -570,13 +555,13 @@ class BaggingModel:
 
         return bags
 
-    def fit(self, data, device, epochs=100, criterion=None):
+    def fit(self, data, device, epochs=100, criterion=None, lr=0.01):
         """Train ensemble model"""
         if criterion is None:
             criterion = nn.NLLLoss()
 
         # Create bags
-        bags = self.create_balanced_bags(data, self.n_estimators)
+        bags = self.create_balanced_bags(data)
 
         last_training_history = None  # Store the last model's training history
 
@@ -587,13 +572,12 @@ class BaggingModel:
             model = self.model_class(**self.model_params)
             model = model.to(device)
 
-            # Create sub-dataset
-            bag_mask = torch.zeros_like(data.train_mask)
-            bag_mask[bag_indices] = True
+            # Create sub-dataset with only bag samples
+            bag_data = self._create_sub_dataset(data, bag_indices)
 
             # Train sub-model with Trainer to get history
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-            trainer = Trainer(model, data, device, optimizer, criterion)
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            trainer = Trainer(model, bag_data, device, optimizer, criterion)
             best_stats, training_history = trainer.fit(epochs=epochs)
 
             self.models.append(model)
@@ -603,6 +587,57 @@ class BaggingModel:
             last_training_history = training_history
 
         return last_training_history
+
+    def _create_sub_dataset(self, data, bag_indices):
+        """Create a subset of the data containing only the specified bag indices"""
+        # Create masks for the subset
+        bag_train_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
+        bag_val_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
+        bag_test_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
+
+        # Map original indices to subset indices
+        index_map = {orig_idx: new_idx for new_idx, orig_idx in enumerate(bag_indices)}
+
+        # For each original mask, find which bag indices belong to which set
+        original_train_indices = torch.where(data.train_mask)[0].cpu().numpy()
+        original_val_indices = torch.where(data.val_mask)[0].cpu().numpy()
+        original_test_indices = torch.where(data.test_mask)[0].cpu().numpy()
+
+        for orig_idx in bag_indices:
+            if orig_idx in original_train_indices:
+                bag_train_mask[index_map[orig_idx]] = True
+            elif orig_idx in original_val_indices:
+                bag_val_mask[index_map[orig_idx]] = True
+            elif orig_idx in original_test_indices:
+                bag_test_mask[index_map[orig_idx]] = True
+
+        # Create subset data
+        subset_data = Data(
+            x=data.x[bag_indices],
+            y=data.y[bag_indices],
+            edge_index=self._remap_edge_index(data.edge_index, index_map),
+            train_mask=bag_train_mask,
+            val_mask=bag_val_mask,
+            test_mask=bag_test_mask
+        )
+
+        return subset_data
+
+    def _remap_edge_index(self, edge_index, index_map):
+        """Remap edge indices to subset indices, keeping only edges within the subset"""
+        edge_index_np = edge_index.cpu().numpy()
+        remapped_edges = []
+
+        for i in range(edge_index_np.shape[1]):
+            src, dst = edge_index_np[0, i], edge_index_np[1, i]
+            if src in index_map and dst in index_map:
+                remapped_edges.append([index_map[src], index_map[dst]])
+
+        if remapped_edges:
+            return torch.tensor(remapped_edges, dtype=torch.long).t()
+        else:
+            # If no edges remain, return empty edge index
+            return torch.empty(2, 0, dtype=torch.long)
 
     def predict(self, data, device):
         """Make predictions"""
@@ -655,7 +690,7 @@ class Trainer:
         return loss.item()
 
     @torch.no_grad()
-    def evaluate(self, detailed=False):
+    def evaluate(self):
         self.model.eval()
         out = self.model(self.data)
         pred = out.argmax(dim=1)
@@ -664,6 +699,15 @@ class Trainer:
         val_y_pred = pred[self.data.val_mask].cpu().numpy()
         val_f1 = f1_score(val_y_true, val_y_pred, average='binary', pos_label=1, zero_division=0)
         val_acc = accuracy_score(val_y_true, val_y_pred)
+
+        # Validation set macro metrics
+        val_macro_recall = recall_score(val_y_true, val_y_pred, average='macro', zero_division=0)
+        val_macro_f1 = f1_score(val_y_true, val_y_pred, average='macro', zero_division=0)
+
+        # Validation set G-Mean
+        val_sensitivity = recall_score(val_y_true, val_y_pred, pos_label=1, zero_division=0)
+        val_specificity = recall_score(val_y_true, val_y_pred, pos_label=0, zero_division=0)
+        val_gmean = np.sqrt(val_sensitivity * val_specificity) if val_sensitivity * val_specificity > 0 else 0
 
         # Test set evaluation
         test_y_true = self.data.y[self.data.test_mask].cpu().numpy()
@@ -684,12 +728,8 @@ class Trainer:
         test_macro_f1 = f1_score(test_y_true, test_y_pred, average='macro', zero_division=0)
 
         # AUC
-        try:
-            test_auc = roc_auc_score(test_y_true, probs[test_mask_np][:, 1])
-            test_macro_auc = test_auc  # For binary classification, macro AUC equals regular AUC
-        except:
-            test_auc = float('nan')
-            test_macro_auc = float('nan')
+        test_auc = roc_auc_score(test_y_true, probs[test_mask_np][:, 1])
+        test_macro_auc = test_auc  # For binary classification, macro AUC equals regular AUC
 
         # G-Mean
         test_sensitivity = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
@@ -700,6 +740,9 @@ class Trainer:
             'val_loss': val_loss,
             'val_f1': val_f1,
             'val_acc': val_acc,
+            'val_macro_recall': val_macro_recall,
+            'val_macro_f1': val_macro_f1,
+            'val_gmean': val_gmean,
             'test_f1': test_f1,
             'test_acc': test_acc,
             'test_precision_illicit': test_precision_illicit,
@@ -727,13 +770,13 @@ class Trainer:
                 test_f1=stats['test_f1'],
                 val_acc=stats['val_acc'],
                 test_acc=stats['test_acc'],
-                val_macro_recall=stats.get('test_macro_recall', 0),
+                val_macro_recall=stats['val_macro_recall'],
                 test_macro_recall=stats['test_macro_recall'],
-                val_gmean=stats.get('test_gmean', 0),
+                val_gmean=stats['val_gmean'],
                 test_gmean=stats['test_gmean'],
-                val_macro_f1=stats.get('test_macro_f1', 0),
+                val_macro_f1=stats['val_macro_f1'],
                 test_macro_f1=stats['test_macro_f1'],
-                val_macro_auc=stats.get('test_macro_auc', 0),
+                val_macro_auc=stats['test_macro_auc'],  # For binary classification, macro AUC equals regular AUC
                 test_macro_auc=stats['test_macro_auc']
             )
 
@@ -828,7 +871,6 @@ def hyperopt_objective(data, device, params):
     # Hyperopt returns actual values, not indices
     model_name = params['model']
     hidden_channels = params['hidden_channels']
-    num_layers = params['num_layers']
     dropout = params['dropout']
     num_heads = params['num_heads']
 
@@ -887,12 +929,8 @@ def calculate_all_metrics(y_true, y_pred, y_probs):
     macro_f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
 
     # AUC
-    try:
-        auc = roc_auc_score(y_true, y_probs[:, 1])
-        macro_auc = auc  # For binary classification, macro AUC equals regular AUC
-    except:
-        auc = float('nan')
-        macro_auc = float('nan')
+    auc = roc_auc_score(y_true, y_probs[:, 1])
+    macro_auc = auc  # For binary classification, macro AUC equals regular AUC
 
     # G-Mean
     sensitivity = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
@@ -965,7 +1003,6 @@ def run_full_pipeline():
         'model': hp.choice('model', ['GCN', 'GAT', 'GIN', 'GraphSAGE']),
         'hidden_channels': hp.choice('hidden_channels', [64, 128, 256]),  # Removed 32 to ensure sufficient capacity
         'dropout': hp.uniform('dropout', 0.1, 0.5),
-        'num_layers': hp.choice('num_layers', [2, 3]),  # Limited to 2-3 layers to avoid dimension collapse
         'lr': hp.loguniform('lr', np.log(1e-4), np.log(1e-2)),
         'num_heads': hp.choice('num_heads', [4, 8])  # Limited to 4-8 heads
     }
@@ -973,7 +1010,6 @@ def run_full_pipeline():
     # Define choice lists for index conversion
     MODEL_CHOICES = ['GCN', 'GAT', 'GIN', 'GraphSAGE']
     HIDDEN_CHANNEL_CHOICES = [64, 128, 256]
-    NUM_LAYER_CHOICES = [2, 3]
     NUM_HEAD_CHOICES = [4, 8]
 
     # Run optimization
@@ -992,29 +1028,24 @@ def run_full_pipeline():
     # Convert indices back to actual values (hp.choice returns indices, not values)
     best_model = MODEL_CHOICES[best['model']]
     best_hidden_channels = HIDDEN_CHANNEL_CHOICES[best['hidden_channels']]
-    best_num_layers = NUM_LAYER_CHOICES[best['num_layers']]
     best_num_heads = NUM_HEAD_CHOICES[best['num_heads']]
     best_dropout = best['dropout']  # hp.uniform returns actual value
     best_lr = best['lr']  # hp.loguniform returns actual value
 
     # Validate parameters to ensure they're reasonable
-    if best_hidden_channels < 32:
-        print(f"Warning: hidden_channels={best_hidden_channels} is very small, setting to 64")
-        best_hidden_channels = 64
-    if best_num_layers > 4:
-        print(f"Warning: num_layers={best_num_layers} is large, setting to 3")
-        best_num_layers = 3
+    best_hidden_channels = max(best_hidden_channels, 64)  # Ensure at least 64
+    best_num_heads = max(min(best_num_heads, 8), 4)       # Ensure between 4 and 8
 
     print("Best hyperparameters:")
     print(f"Model: {best_model}")
     print(f"Hidden channels: {best_hidden_channels}")
     print(f"Dropout: {best['dropout']:.3f}")
-    print(f"Layers: {best_num_layers}")
+    print(f"Layers: 3 (MixHopConv fixed)")
     print(f"Learning rate: {best['lr']:.6f}")
     print(f"Num heads: {best_num_heads}")
 
     # Validate final parameters
-    print(f"Final model config: {best_hidden_channels} hidden, {best_num_layers} layers, {best_num_heads} heads")
+    print(f"Final model config: {best_hidden_channels} hidden, 3 layers, {best_num_heads} heads")
 
     # ========================================================================
     # 5. Train individual MixHopConv-enhanced GNN models
@@ -1041,8 +1072,7 @@ def run_full_pipeline():
     test_y_true = data.y[data.test_mask].cpu().numpy()
 
     # Ensure minimum reasonable values
-    best_hidden_channels = max(best_hidden_channels, 32)
-    best_num_layers = min(max(best_num_layers, 2), 4)
+    best_hidden_channels = max(best_hidden_channels, 64)
     best_num_heads = min(max(best_num_heads, 4), 16)
 
     single_model_configs = create_mixhop_model_configs(
@@ -1105,7 +1135,7 @@ def run_full_pipeline():
             voting='soft'
         )
 
-        bagging_history = ensemble.fit(data, device, epochs=100)
+        bagging_history = ensemble.fit(data, device, epochs=100, lr=best['lr'])
         ensemble_models[model_name] = ensemble
 
         # Store training history for bagging model (using last model's history as representative)
