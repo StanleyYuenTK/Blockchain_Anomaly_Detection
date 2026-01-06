@@ -20,17 +20,18 @@ from sklearn.metrics import f1_score, accuracy_score, classification_report, con
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
-# Hyperopt imports
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from functools import partial
+from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations
 
-def create_model_configs(data, best_hidden_channels, best_num_layers, best_num_heads, dropout_value):
+
+def create_model_configs(data, best_hidden_channels, best_num_heads, dropout_value):
     """Create model parameter configurations for all GNN models"""
     base_config = {
         'in_channels': data.x.size(1),
         'hidden_channels': best_hidden_channels,
         'out_channels': 2,
-        'num_layers': best_num_layers,
+        'num_layers': 2,  # Fixed to 2 layers
         'dropout': dropout_value
     }
 
@@ -46,10 +47,6 @@ def create_model_configs(data, best_hidden_channels, best_num_layers, best_num_h
 
     return configs
 
-# Visualization tools
-from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations
-
-warnings.filterwarnings('ignore')
 
 # -----------------------
 # Loss Functions
@@ -64,19 +61,8 @@ class FocalLoss(nn.Module):
         self.reduction = reduction
 
     def forward(self, inputs, targets):
-        # Convert inputs to probabilities
-        if inputs.dim() > 2:
-            inputs = inputs.view(inputs.size(0), inputs.size(1), -1)  # (N, C, H, W) -> (N, C, H*W)
-            inputs = inputs.transpose(1, 2)    # (N, C, H*W) -> (N, H*W, C)
-            inputs = inputs.contiguous().view(-1, inputs.size(2))   # (N*H*W, C)
-
-        # Compute cross entropy loss
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-
-        # Get probabilities
         pt = torch.exp(-ce_loss)
-
-        # Compute focal loss
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
 
         if self.reduction == 'mean':
@@ -97,9 +83,8 @@ class BaseGNN(nn.Module):
 
 
 class GCNModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=2, dropout=0.5):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(GCNModel, self).__init__()
-        self.num_layers = num_layers
         self.hidden_channels = hidden_channels
         self.convs = nn.ModuleList()
         self.convs.append(GCNConv(in_channels, hidden_channels))
@@ -124,9 +109,8 @@ class GCNModel(BaseGNN):
 
 
 class GATModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, num_layers=2, dropout=0.5):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, dropout=0.5):
         super(GATModel, self).__init__()
-        self.num_layers = num_layers
         self.num_heads = num_heads
         self.convs = nn.ModuleList()
         self.convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
@@ -150,9 +134,8 @@ class GATModel(BaseGNN):
 
 
 class GraphSAGEModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=2, dropout=0.5, aggr='mean'):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, aggr='mean'):
         super(GraphSAGEModel, self).__init__()
-        self.num_layers = num_layers
         self.convs = nn.ModuleList()
         self.convs.append(SAGEConv(in_channels, hidden_channels, aggr=aggr))
         self.convs.append(SAGEConv(hidden_channels, out_channels, aggr=aggr))
@@ -175,9 +158,8 @@ class GraphSAGEModel(BaseGNN):
 
 
 class GINModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_layers=2, dropout=0.5):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(GINModel, self).__init__()
-        self.num_layers = num_layers
         self.convs = nn.ModuleList()
         # mlp_channels = [in_channels, hidden_channels, hidden_channels]
         self.convs.append(GINConv(MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout)))
@@ -254,14 +236,10 @@ MODEL_CLASSES = {
 
 def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=128, num_epochs=100, augment_ratio=0.5):
     """Use GAN to generate additional illegal (class 1) samples"""
-    print("Applying GAN-based data augmentation for illegal samples...")
-
-    # Move data to CPU for processing to avoid CUDA issues
-    data_cpu = data.cpu()
 
     # Extract illegal samples (class 1)
-    illegal_mask = (data_cpu.y == 1)
-    illegal_features = data_cpu.x[illegal_mask]
+    illegal_mask = (data.y == 1)
+    illegal_features = data.x[illegal_mask]
     num_illegal = illegal_features.size(0)
     num_to_generate = int(num_illegal * augment_ratio)
 
@@ -271,10 +249,10 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
 
     print(f"Found {num_illegal} illegal samples, will generate {num_to_generate} additional samples")
 
-    # Initialize GAN models on CPU to avoid CUDA issues
+    # Initialize GAN models
     feature_dim = data.x.size(1)
-    generator = Generator(latent_dim, hidden_dim, feature_dim)
-    discriminator = Discriminator(feature_dim, hidden_dim)
+    generator = Generator(latent_dim, hidden_dim, feature_dim).to(device)
+    discriminator = Discriminator(feature_dim, hidden_dim).to(device)
 
     # Optimizers
     g_optimizer = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
@@ -283,9 +261,9 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
     # Loss function
     criterion = nn.BCELoss()
 
-    # Training data for discriminator (on CPU)
-    real_labels = torch.ones(num_illegal, 1)
-    fake_labels = torch.zeros(num_illegal, 1)
+    # Training data for discriminator
+    real_labels = torch.ones(num_illegal, 1).to(device)
+    fake_labels = torch.zeros(num_illegal, 1).to(device)
 
     # Training loop
     for epoch in range(num_epochs):
@@ -297,7 +275,7 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
         d_loss_real = criterion(real_output, real_labels)
 
         # Fake samples
-        z = torch.randn(num_illegal, latent_dim)
+        z = torch.randn(num_illegal, latent_dim).to(device)
         fake_features = generator(z)
         fake_output = discriminator(fake_features.detach())
         d_loss_fake = criterion(fake_output, fake_labels)
@@ -319,27 +297,30 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
     # Generate new samples
     generator.eval()
     with torch.no_grad():
-        z = torch.randn(num_to_generate, latent_dim)
+        z = torch.randn(num_to_generate, latent_dim).to(device)
         generated_features = generator(z)
 
         # Add small noise to make samples more diverse
         noise = torch.randn_like(generated_features) * 0.1
         generated_features = generated_features + noise
 
+    # Move generated features back to CPU for concatenation if needed
+    generated_features = generated_features.cpu()
+
     # Create new data with augmented samples
-    new_x = torch.cat([data_cpu.x, generated_features], dim=0)
-    new_y = torch.cat([data_cpu.y, torch.ones(num_to_generate, dtype=torch.long)], dim=0)
+    new_x = torch.cat([data.x, generated_features], dim=0)
+    new_y = torch.cat([data.y, torch.ones(num_to_generate, dtype=torch.long)], dim=0)
 
     # Create new masks (keep original train/val/test split, add new samples to training)
-    new_train_mask = torch.cat([data_cpu.train_mask, torch.ones(num_to_generate, dtype=torch.bool)], dim=0)
-    new_val_mask = torch.cat([data_cpu.val_mask, torch.zeros(num_to_generate, dtype=torch.bool)], dim=0)
-    new_test_mask = torch.cat([data_cpu.test_mask, torch.zeros(num_to_generate, dtype=torch.bool)], dim=0)
+    new_train_mask = torch.cat([data.train_mask, torch.ones(num_to_generate, dtype=torch.bool)], dim=0)
+    new_val_mask = torch.cat([data.val_mask, torch.zeros(num_to_generate, dtype=torch.bool)], dim=0)
+    new_test_mask = torch.cat([data.test_mask, torch.zeros(num_to_generate, dtype=torch.bool)], dim=0)
 
     # Create augmented data object
     augmented_data = Data(
         x=new_x,
         y=new_y,
-        edge_index=data_cpu.edge_index,  # Keep original edges
+        edge_index=data.edge_index,  # Keep original edges
         train_mask=new_train_mask,
         val_mask=new_val_mask,
         test_mask=new_test_mask
@@ -431,16 +412,12 @@ class IsolationForestBaseline:
         macro_f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
 
         # AUC (using anomaly scores)
-        try:
-            # Convert anomaly scores to probability-like scores for AUC
-            # Isolation Forest scores: negative = more anomalous
-            # Convert to positive scores where higher = more likely illegal
-            prob_scores = -anomaly_scores  # Flip sign so higher = more anomalous
-            auc = roc_auc_score(y_true, prob_scores)
-            macro_auc = auc  # For binary classification
-        except:
-            auc = float('nan')
-            macro_auc = float('nan')
+        # Convert anomaly scores to probability-like scores for AUC
+        # Isolation Forest scores: negative = more anomalous
+        # Convert to positive scores where higher = more likely illegal
+        prob_scores = -anomaly_scores  # Flip sign so higher = more anomalous
+        auc = roc_auc_score(y_true, prob_scores)
+        macro_auc = auc  # For binary classification, macro AUC equals regular AUC
 
         # G-Mean
         sensitivity = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
@@ -512,7 +489,19 @@ def load_elliptic_data(dataset_dir='../Dataset'):
 
 class BaggingModel:
     """
-    Ensemble learning framework with Bagging (maintain class imbalance ratio)
+    Ensemble learning framework with Bagging for GNNs that maintains class imbalance ratios.
+
+    This implementation creates balanced bootstrap samples that preserve the original
+    class distribution, then trains individual GNN models on each sample. Final
+    predictions are made using soft voting (averaging probabilities).
+
+    Attributes:
+        model_class: The GNN model class to ensemble
+        model_params: Parameters for initializing individual models
+        n_estimators: Number of base models in the ensemble
+        voting: Voting strategy ('soft' for probability averaging)
+        models: List of trained base models
+        bag_indices: List of indices used for each bag
     """
     def __init__(self, model_class, model_params, n_estimators=5, voting='soft'):
         self.model_class = model_class
@@ -522,7 +511,7 @@ class BaggingModel:
         self.models = []
         self.bag_indices = []  # Record training indices for each bag
 
-    def create_balanced_bags(self, data, n_bags=5):
+    def create_balanced_bags(self, data):
         """Create bags that maintain class imbalance ratio"""
         train_idx = torch.where(data.train_mask)[0].cpu().numpy()
         train_labels = data.y[train_idx].cpu().numpy()
@@ -532,7 +521,7 @@ class BaggingModel:
         label_ratios = counts / len(train_labels)
 
         bags = []
-        for _ in range(n_bags):
+        for _ in range(self.n_estimators):
             bag_indices = []
             for label, ratio in zip(unique_labels, label_ratios):
                 label_indices = train_idx[train_labels == label]
@@ -544,13 +533,13 @@ class BaggingModel:
 
         return bags
 
-    def fit(self, data, device, epochs=100, criterion=None):
+    def fit(self, data, device, epochs=100, criterion=None, lr=0.01):
         """Train ensemble model"""
         if criterion is None:
             criterion = nn.NLLLoss()
 
         # Create bags
-        bags = self.create_balanced_bags(data, self.n_estimators)
+        bags = self.create_balanced_bags(data)
 
         last_training_history = None  # Store the last model's training history
 
@@ -561,13 +550,12 @@ class BaggingModel:
             model = self.model_class(**self.model_params)
             model = model.to(device)
 
-            # Create sub-dataset
-            bag_mask = torch.zeros_like(data.train_mask)
-            bag_mask[bag_indices] = True
+            # Create sub-dataset with only bag samples
+            bag_data = self._create_sub_dataset(data, bag_indices)
 
             # Train sub-model with Trainer to get history
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-            trainer = Trainer(model, data, device, optimizer, criterion)
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            trainer = Trainer(model, bag_data, device, optimizer, criterion)
             best_stats, training_history = trainer.fit(epochs=epochs)
 
             self.models.append(model)
@@ -577,6 +565,57 @@ class BaggingModel:
             last_training_history = training_history
 
         return last_training_history
+
+    def _create_sub_dataset(self, data, bag_indices):
+        """Create a subset of the data containing only the specified bag indices"""
+        # Create masks for the subset
+        bag_train_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
+        bag_val_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
+        bag_test_mask = torch.zeros(len(bag_indices), dtype=torch.bool)
+
+        # Map original indices to subset indices
+        index_map = {orig_idx: new_idx for new_idx, orig_idx in enumerate(bag_indices)}
+
+        # For each original mask, find which bag indices belong to which set
+        original_train_indices = torch.where(data.train_mask)[0].cpu().numpy()
+        original_val_indices = torch.where(data.val_mask)[0].cpu().numpy()
+        original_test_indices = torch.where(data.test_mask)[0].cpu().numpy()
+
+        for orig_idx in bag_indices:
+            if orig_idx in original_train_indices:
+                bag_train_mask[index_map[orig_idx]] = True
+            elif orig_idx in original_val_indices:
+                bag_val_mask[index_map[orig_idx]] = True
+            elif orig_idx in original_test_indices:
+                bag_test_mask[index_map[orig_idx]] = True
+
+        # Create subset data
+        subset_data = Data(
+            x=data.x[bag_indices],
+            y=data.y[bag_indices],
+            edge_index=self._remap_edge_index(data.edge_index, index_map),
+            train_mask=bag_train_mask,
+            val_mask=bag_val_mask,
+            test_mask=bag_test_mask
+        )
+
+        return subset_data
+
+    def _remap_edge_index(self, edge_index, index_map):
+        """Remap edge indices to subset indices, keeping only edges within the subset"""
+        edge_index_np = edge_index.cpu().numpy()
+        remapped_edges = []
+
+        for i in range(edge_index_np.shape[1]):
+            src, dst = edge_index_np[0, i], edge_index_np[1, i]
+            if src in index_map and dst in index_map:
+                remapped_edges.append([index_map[src], index_map[dst]])
+
+        if remapped_edges:
+            return torch.tensor(remapped_edges, dtype=torch.long).t()
+        else:
+            # If no edges remain, return empty edge index
+            return torch.empty(2, 0, dtype=torch.long)
 
     def predict(self, data, device):
         """Make predictions"""
@@ -629,7 +668,7 @@ class Trainer:
         return loss.item()
 
     @torch.no_grad()
-    def evaluate(self, detailed=False):
+    def evaluate(self):
         self.model.eval()
         out = self.model(self.data)
         pred = out.argmax(dim=1)
@@ -638,6 +677,15 @@ class Trainer:
         val_y_pred = pred[self.data.val_mask].cpu().numpy()
         val_f1 = f1_score(val_y_true, val_y_pred, average='binary', pos_label=1, zero_division=0)
         val_acc = accuracy_score(val_y_true, val_y_pred)
+
+        # Validation set macro metrics
+        val_macro_recall = recall_score(val_y_true, val_y_pred, average='macro', zero_division=0)
+        val_macro_f1 = f1_score(val_y_true, val_y_pred, average='macro', zero_division=0)
+
+        # Validation set G-Mean
+        val_sensitivity = recall_score(val_y_true, val_y_pred, pos_label=1, zero_division=0)
+        val_specificity = recall_score(val_y_true, val_y_pred, pos_label=0, zero_division=0)
+        val_gmean = np.sqrt(val_sensitivity * val_specificity) if val_sensitivity * val_specificity > 0 else 0
 
         # Test set evaluation
         test_y_true = self.data.y[self.data.test_mask].cpu().numpy()
@@ -658,12 +706,8 @@ class Trainer:
         test_macro_f1 = f1_score(test_y_true, test_y_pred, average='macro', zero_division=0)
 
         # AUC
-        try:
-            test_auc = roc_auc_score(test_y_true, probs[test_mask_np][:, 1])
-            test_macro_auc = test_auc  # For binary classification, macro AUC equals regular AUC
-        except:
-            test_auc = float('nan')
-            test_macro_auc = float('nan')
+        test_auc = roc_auc_score(test_y_true, probs[test_mask_np][:, 1])
+        test_macro_auc = test_auc  # For binary classification, macro AUC equals regular AUC
 
         # G-Mean
         test_sensitivity = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
@@ -674,6 +718,9 @@ class Trainer:
             'val_loss': val_loss,
             'val_f1': val_f1,
             'val_acc': val_acc,
+            'val_macro_recall': val_macro_recall,
+            'val_macro_f1': val_macro_f1,
+            'val_gmean': val_gmean,
             'test_f1': test_f1,
             'test_acc': test_acc,
             'test_precision_illicit': test_precision_illicit,
@@ -701,13 +748,13 @@ class Trainer:
                 test_f1=stats['test_f1'],
                 val_acc=stats['val_acc'],
                 test_acc=stats['test_acc'],
-                val_macro_recall=stats.get('test_macro_recall', 0),
+                val_macro_recall=stats['val_macro_recall'],
                 test_macro_recall=stats['test_macro_recall'],
-                val_gmean=stats.get('test_gmean', 0),
+                val_gmean=stats['val_gmean'],
                 test_gmean=stats['test_gmean'],
-                val_macro_f1=stats.get('test_macro_f1', 0),
+                val_macro_f1=stats['val_macro_f1'],
                 test_macro_f1=stats['test_macro_f1'],
-                val_macro_auc=stats.get('test_macro_auc', 0),
+                val_macro_auc=stats['test_macro_auc'],  # For binary classification, macro AUC equals regular AUC
                 test_macro_auc=stats['test_macro_auc']
             )
 
@@ -794,7 +841,16 @@ class FinalEnsemble:
 # -----------------------
 
 def hyperopt_objective(data, device, params):
-    """Hyperopt optimization objective function"""
+    """Hyperopt optimization objective function for GNN hyperparameter tuning.
+
+    Args:
+        data: PyTorch Geometric Data object containing the graph dataset
+        device: PyTorch device (CPU or GPU) for model training
+        params: Dictionary containing hyperparameters from hyperopt search space
+
+    Returns:
+        dict: Dictionary with loss value and additional metrics for hyperopt
+    """
     # Set random seeds for reproducibility
     torch.manual_seed(42)
     np.random.seed(42)
@@ -803,11 +859,10 @@ def hyperopt_objective(data, device, params):
     # Hyperopt returns actual values, not indices
     model_name = params['model']
     hidden_channels = params['hidden_channels']
-    num_layers = params['num_layers']
     dropout = params['dropout']
     num_heads = params['num_heads']
 
-    # Create model using the mapping
+    # Create model using the mapping (all models use 2 layers)
     model_class = MODEL_CLASSES.get(model_name, GCNModel)
     if model_name == 'GAT':
         model = model_class(
@@ -815,7 +870,6 @@ def hyperopt_objective(data, device, params):
             hidden_channels=hidden_channels,
             out_channels=2,
             num_heads=num_heads,
-            num_layers=num_layers,
             dropout=dropout
         )
     else:
@@ -823,7 +877,6 @@ def hyperopt_objective(data, device, params):
             in_channels=data.x.size(1),
             hidden_channels=hidden_channels,
             out_channels=2,
-            num_layers=num_layers,
             dropout=dropout
         )
 
@@ -852,7 +905,25 @@ def hyperopt_objective(data, device, params):
 # -----------------------
 
 def calculate_all_metrics(y_true, y_pred, y_probs):
-    """Calculate all 9 evaluation metrics"""
+    """Calculate all 9 evaluation metrics for binary classification.
+
+    Args:
+        y_true: Ground truth labels (numpy array)
+        y_pred: Predicted labels (numpy array)
+        y_probs: Predicted probabilities for positive class (numpy array)
+
+    Returns:
+        dict: Dictionary containing all 9 metrics:
+            - f1: F1 score for positive class
+            - accuracy: Overall accuracy
+            - precision: Precision for positive class
+            - recall: Recall for positive class
+            - macro_recall: Macro-averaged recall
+            - macro_f1: Macro-averaged F1 score
+            - auc: Area under ROC curve
+            - macro_auc: Macro-averaged AUC (same as auc for binary)
+            - gmean: Geometric mean of sensitivity and specificity
+    """
     # Basic metrics
     f1 = f1_score(y_true, y_pred, average='binary', pos_label=1, zero_division=0)
     accuracy = accuracy_score(y_true, y_pred)
@@ -864,12 +935,8 @@ def calculate_all_metrics(y_true, y_pred, y_probs):
     macro_f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
 
     # AUC
-    try:
-        auc = roc_auc_score(y_true, y_probs[:, 1])
-        macro_auc = auc  # For binary classification, macro AUC equals regular AUC
-    except:
-        auc = float('nan')
-        macro_auc = float('nan')
+    auc = roc_auc_score(y_true, y_probs[:, 1])
+    macro_auc = auc  # For binary classification, macro AUC equals regular AUC
 
     # G-Mean
     sensitivity = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
@@ -941,7 +1008,6 @@ def run_full_pipeline():
         'model': hp.choice('model', ['GCN', 'GAT', 'GIN', 'GraphSAGE']),
         'hidden_channels': hp.choice('hidden_channels', [64, 128, 256]),
         'dropout': hp.uniform('dropout', 0.1, 0.5),
-        'num_layers': hp.choice('num_layers', [2, 3]),
         'lr': hp.loguniform('lr', np.log(1e-4), np.log(1e-2)),
         'num_heads': hp.choice('num_heads', [4, 8])
     }
@@ -949,7 +1015,6 @@ def run_full_pipeline():
     # Define choice lists for index conversion
     MODEL_CHOICES = ['GCN', 'GAT', 'GIN', 'GraphSAGE']
     HIDDEN_CHANNEL_CHOICES = [64, 128, 256]
-    NUM_LAYER_CHOICES = [2, 3]
     NUM_HEAD_CHOICES = [4, 8]
 
     # Run optimization
@@ -968,27 +1033,22 @@ def run_full_pipeline():
     # Convert indices back to actual values (hp.choice returns indices, not values)
     best_model = MODEL_CHOICES[best['model']]
     best_hidden_channels = HIDDEN_CHANNEL_CHOICES[best['hidden_channels']]
-    best_num_layers = NUM_LAYER_CHOICES[best['num_layers']]
     best_num_heads = NUM_HEAD_CHOICES[best['num_heads']]
 
     # Validate parameters to ensure they're reasonable
-    if best_hidden_channels < 32:
-        print(f"Warning: hidden_channels={best_hidden_channels} is very small, setting to 64")
-        best_hidden_channels = 64
-    if best_num_layers > 4:
-        print(f"Warning: num_layers={best_num_layers} is large, setting to 3")
-        best_num_layers = 3
+    best_hidden_channels = max(best_hidden_channels, 64)  # Ensure at least 64
+    best_num_heads = max(min(best_num_heads, 8), 4)       # Ensure between 4 and 8
 
     print("Best hyperparameters:")
     print(f"Model: {best_model}")
     print(f"Hidden channels: {best_hidden_channels}")
     print(f"Dropout: {best['dropout']:.3f}")
-    print(f"Layers: {best_num_layers}")
+    print(f"Layers: 2 (fixed)")
     print(f"Learning rate: {best['lr']:.6f}")
     print(f"Num heads: {best_num_heads}")
 
     # Validate final parameters
-    print(f"Final model config: {best_hidden_channels} hidden, {best_num_layers} layers, {best_num_heads} heads")
+    print(f"Final model config: {best_hidden_channels} hidden, 2 layers, {best_num_heads} heads")
 
     # ========================================================================
     # 5. Train individual GNN models (single models)
@@ -1014,14 +1074,8 @@ def run_full_pipeline():
     # Define test labels for evaluation
     test_y_true = data.y[data.test_mask].cpu().numpy()
 
-    # Ensure minimum reasonable values
-    best_hidden_channels = max(best_hidden_channels, 32)
-    best_num_layers = min(max(best_num_layers, 2), 4)
-    best_num_heads = min(max(best_num_heads, 4), 16)
-
     single_model_configs = create_model_configs(
-        data, best_hidden_channels, best_num_layers,
-        best_num_heads, best['dropout']
+        data, best_hidden_channels, best_num_heads, best['dropout']
     )
 
     for model_name, params in single_model_configs.items():
@@ -1059,8 +1113,7 @@ def run_full_pipeline():
 
     # Create BaggingEnsemble combining GCN, GAT, GIN, GraphSAGE
     bagging_model_configs = create_model_configs(
-        data, best_hidden_channels, best_num_layers,
-        best_num_heads, best['dropout']
+        data, best_hidden_channels, best_num_heads, best['dropout']
     )
 
     # Train four ensemble models
@@ -1077,7 +1130,7 @@ def run_full_pipeline():
             voting='soft'
         )
 
-        bagging_history = ensemble.fit(data, device, epochs=100)
+        bagging_history = ensemble.fit(data, device, epochs=100, lr=best['lr'])
         ensemble_models[model_name] = ensemble
 
         # Store training history for bagging model (using last model's history as representative)
