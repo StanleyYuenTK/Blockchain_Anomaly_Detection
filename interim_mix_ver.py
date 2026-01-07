@@ -329,7 +329,7 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
 class IsolationForestBaseline:
     """Baseline model using Isolation Forest for anomaly detection"""
 
-    def __init__(self, n_estimators=100, max_samples='auto', random_state=42, contamination='auto'):
+    def __init__(self, n_estimators=100, max_samples='auto', random_state=24027277, contamination='auto'):
         self.n_estimators = n_estimators
         self.max_samples = max_samples
         self.random_state = random_state
@@ -763,9 +763,9 @@ class FinalEnsemble:
 def hyperopt_objective(data, device, params):
     """Hyperopt optimization objective function"""
     # Set random seeds for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
-    random.seed(42)
+    torch.manual_seed(24027277)
+    np.random.seed(24027277)
+    random.seed(24027277)
 
     # Clean up params to ensure only current parameters are used
     cleaned_params = {
@@ -887,7 +887,7 @@ def run_full_pipeline():
     baseline_model = IsolationForestBaseline(
         n_estimators=100,
         contamination='auto',  # Auto-calculate from training data
-        random_state=42
+        random_state=24027277
     )
     baseline_model.fit(data)
     baseline_results = baseline_model.evaluate(data)
@@ -929,7 +929,7 @@ def run_full_pipeline():
         algo=tpe.suggest,
         max_evals=1,  # 1 evaluations
         trials=trials,
-        rstate=np.random.default_rng(42)
+        rstate=np.random.default_rng(24027277)
     )
 
     # Convert indices back to actual values (hp.choice returns indices, not values)

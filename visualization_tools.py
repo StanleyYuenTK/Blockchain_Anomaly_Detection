@@ -187,7 +187,7 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
             ax.set_ylim(0, 1.0)
 
         # Rotate x-axis labels for better readability
-        plt.xticks(rotation=45, ha='right', fontsize=24)
+        plt.xticks(rotation=45, ha='right', fontsize=12)
 
         # Add grid
         ax.grid(True, alpha=0.3, axis='y')
