@@ -833,7 +833,7 @@ def hyperopt_objective(data, device, params):
 
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
-    criterion = FocalLoss(alpha=1, gamma=2)  # Use Focal Loss for class imbalance
+    criterion = FocalLoss(alpha=0.25, gamma=2)  # Use Focal Loss for class imbalance (alpha < 1 for minority class)
 
     trainer = Trainer(model, data, device, optimizer, criterion)
 
@@ -1027,7 +1027,7 @@ def run_full_pipeline():
         single_model = model_class(**params)
         single_model = single_model.to(device)
         optimizer = torch.optim.Adam(single_model.parameters(), lr=best['lr'])
-        criterion = FocalLoss(alpha=1, gamma=2)
+        criterion = FocalLoss(alpha=0.25, gamma=2)  # Use Focal Loss for class imbalance (alpha < 1 for minority class)
 
         trainer = Trainer(single_model, data, device, optimizer, criterion)
         best_stats, training_history = trainer.fit(epochs=100)

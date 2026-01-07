@@ -30,7 +30,15 @@ class TrainingHistory:
             'val_f1': [],
             'val_acc': [],
             'test_f1': [],
-            'test_acc': []
+            'test_acc': [],
+            'val_macro_recall': [],
+            'test_macro_recall': [],
+            'val_gmean': [],
+            'test_gmean': [],
+            'val_macro_f1': [],
+            'test_macro_f1': [],
+            'val_macro_auc': [],
+            'test_macro_auc': []
         }
 
     def add_epoch(self, epoch, train_loss, val_loss, val_f1, val_acc, test_f1, test_acc,
@@ -45,15 +53,6 @@ class TrainingHistory:
         self.history['test_f1'].append(test_f1)
         self.history['test_acc'].append(test_acc)
         # Additional metrics
-        if 'val_macro_recall' not in self.history:
-            self.history['val_macro_recall'] = []
-            self.history['test_macro_recall'] = []
-            self.history['val_gmean'] = []
-            self.history['test_gmean'] = []
-            self.history['val_macro_f1'] = []
-            self.history['test_macro_f1'] = []
-            self.history['val_macro_auc'] = []
-            self.history['test_macro_auc'] = []
         self.history['val_macro_recall'].append(val_macro_recall)
         self.history['test_macro_recall'].append(test_macro_recall)
         self.history['val_gmean'].append(val_gmean)
@@ -180,10 +179,15 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
         # Customize the plot
         ax.set_ylabel(metric_label, fontsize=14, fontweight='bold')
         ax.set_title(f'Model Comparison: {metric_label}', fontsize=16, fontweight='bold', pad=20)
-        ax.set_ylim(0, max([v for v in values if not np.isnan(v)]) * 1.15 if any(not np.isnan(v) for v in values) else 1)
+        # Set y-axis limit based on valid values
+        valid_values = [v for v in values if not np.isnan(v)]
+        if valid_values:
+            ax.set_ylim(0, max(valid_values) * 1.15)
+        else:
+            ax.set_ylim(0, 1.0)
 
         # Rotate x-axis labels for better readability
-        plt.xticks(rotation=45, ha='right')
+        plt.xticks(rotation=45, ha='right', fontsize=24)
 
         # Add grid
         ax.grid(True, alpha=0.3, axis='y')
@@ -238,8 +242,7 @@ def generate_mixhop_visualizations(results_collector, training_histories, test_y
 
     # Models to generate training curves for
     models_to_plot = [
-        'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single',
-        'MixHop_GCN_Bagging', 'MixHop_GAT_Bagging', 'MixHop_GIN_Bagging', 'MixHop_GraphSAGE_Bagging'
+        'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single'
     ]
 
     for model_key in models_to_plot:
@@ -289,7 +292,7 @@ def generate_mixhop_visualizations(results_collector, training_histories, test_y
     # Get final metrics for ensemble
     ensemble_metrics = results_collector.get('MixHop_Final_Ensemble', {})
     if ensemble_metrics:
-        metrics_names = ['f1', 'accuracy', 'precision', 'recall', 'macro_f1', 'auc']
+        metrics_names = ['f1', 'accuracy', 'precision', 'recall', 'macro_recall', 'macro_f1', 'auc', 'macro_auc', 'gmean']
         metrics_values = [ensemble_metrics.get(m, 0) for m in metrics_names]
 
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -391,7 +394,7 @@ def generate_standard_gnn_visualizations(results_collector, training_histories, 
     # Get final metrics for ensemble
     ensemble_metrics = results_collector.get('Final_Ensemble', {})
     if ensemble_metrics:
-        metrics_names = ['f1', 'accuracy', 'precision', 'recall', 'macro_f1', 'auc']
+        metrics_names = ['f1', 'accuracy', 'precision', 'recall', 'macro_recall', 'macro_f1', 'auc', 'macro_auc', 'gmean']
         metrics_values = [ensemble_metrics.get(m, 0) for m in metrics_names]
 
         fig, ax = plt.subplots(figsize=(10, 6))

@@ -584,6 +584,12 @@ class Trainer:
         val_macro_recall = recall_score(val_y_true, val_y_pred, average='macro', zero_division=0)
         val_macro_f1 = f1_score(val_y_true, val_y_pred, average='macro', zero_division=0)
 
+        # Validation set AUC
+        val_probs = torch.exp(out).cpu().numpy()
+        val_mask_np = self.data.val_mask.cpu().numpy()
+        val_auc = roc_auc_score(val_y_true, val_probs[val_mask_np][:, 1])
+        val_macro_auc = val_auc  # For binary classification, macro AUC equals regular AUC
+
         # Validation set G-Mean
         val_sensitivity = recall_score(val_y_true, val_y_pred, pos_label=1, zero_division=0)
         val_specificity = recall_score(val_y_true, val_y_pred, pos_label=0, zero_division=0)
@@ -595,6 +601,7 @@ class Trainer:
             'val_acc': val_acc,
             'val_macro_recall': val_macro_recall,
             'val_macro_f1': val_macro_f1,
+            'val_macro_auc': val_macro_auc,
             'val_gmean': val_gmean
         }
 
@@ -675,7 +682,7 @@ class Trainer:
                 test_gmean=stats['test_gmean'],
                 val_macro_f1=stats['val_macro_f1'],
                 test_macro_f1=stats['test_macro_f1'],
-                val_macro_auc=stats['test_macro_auc'],  # For binary classification, macro AUC equals regular AUC
+                val_macro_auc=stats['val_macro_auc'],  # For binary classification, macro AUC equals regular AUC
                 test_macro_auc=stats['test_macro_auc']
             )
 
@@ -792,7 +799,7 @@ def hyperopt_objective(data, device, params):
 
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
-    criterion = FocalLoss(alpha=1, gamma=2)  # Use Focal Loss for class imbalance
+    criterion = FocalLoss(alpha=0.25, gamma=2)  # Use Focal Loss for class imbalance (alpha < 1 for minority class)
 
     trainer = Trainer(model, data, device, optimizer, criterion)
 
