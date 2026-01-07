@@ -6,7 +6,6 @@ Name: Yuen Tsz Ki
 import os
 import numpy as np
 import pandas as pd
-from collections import Counter
 import random
 
 import torch
@@ -53,23 +52,16 @@ def create_mixhop_model_configs(data, best_hidden_channels, best_num_heads, drop
 
 class FocalLoss(nn.Module):
     """Focal Loss for addressing class imbalance"""
-    def __init__(self, alpha=1, gamma=2, reduction='mean'):
+    def __init__(self, alpha=1, gamma=2):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
-        self.reduction = reduction
 
     def forward(self, inputs, targets):
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
+        return focal_loss.mean()
 
 # -----------------------
 # Model definitions with MixHopConv enhancement
@@ -85,28 +77,22 @@ class MixHopGCNModel(BaseGNN):
     """GCN with MixHopConv enhancement: Initial transformation + GCN + Output refinement"""
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(MixHopGCNModel, self).__init__()
-        # MixHopConv for initial feature transformation (using only 0-hop for dimension consistency)
         self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0])
-        # GCN for feature learning
         self.gcn = GCNConv(hidden_channels, hidden_channels)
-        # Final MixHopConv for output refinement
         self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
 
-        # Stage 1: Initial feature transformation
         x = self.mixhop1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 2: GCN feature learning
         x = self.gcn(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 3: Final output refinement
         x = self.mixhop2(x, edge_index)
 
         out = F.log_softmax(x, dim=1)
@@ -117,28 +103,22 @@ class MixHopGATModel(BaseGNN):
     """GAT with MixHopConv enhancement: Initial transformation + GAT + Output refinement"""
     def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, dropout=0.5):
         super(MixHopGATModel, self).__init__()
-        # MixHopConv for initial feature transformation (using only 0-hop for dimension consistency)
         self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0])
-        # GAT for attention-based feature learning
         self.gat = GATConv(hidden_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True)
-        # Final MixHopConv for output refinement
         self.mixhop2 = MixHopConv(hidden_channels * num_heads, out_channels, powers=[0])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
 
-        # Stage 1: Initial feature transformation
         x = self.mixhop1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 2: GAT attention learning
         x = self.gat(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 3: Final output refinement
         x = self.mixhop2(x, edge_index)
 
         out = F.log_softmax(x, dim=1)
@@ -149,28 +129,22 @@ class MixHopGINModel(BaseGNN):
     """GIN with MixHopConv enhancement: Initial transformation + GIN + Output refinement"""
     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
         super(MixHopGINModel, self).__init__()
-        # MixHopConv for initial feature transformation (using only 0-hop for dimension consistency)
         self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0])
-        # GIN for graph isomorphism learning
         self.gin = GINConv(MLP([hidden_channels, hidden_channels, hidden_channels], dropout=dropout))
-        # Final MixHopConv for output refinement
         self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
 
-        # Stage 1: Initial feature transformation
         x = self.mixhop1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 2: GIN isomorphism learning
         x = self.gin(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 3: Final output refinement
         x = self.mixhop2(x, edge_index)
 
         out = F.log_softmax(x, dim=1)
@@ -181,28 +155,22 @@ class MixHopGraphSAGEModel(BaseGNN):
     """GraphSAGE with MixHopConv enhancement: Initial transformation + GraphSAGE + Output refinement"""
     def __init__(self, in_channels, hidden_channels, out_channels, aggr='mean', dropout=0.5):
         super(MixHopGraphSAGEModel, self).__init__()
-        # MixHopConv for initial feature transformation (using only 0-hop for dimension consistency)
         self.mixhop1 = MixHopConv(in_channels, hidden_channels, powers=[0])
-        # GraphSAGE for neighborhood sampling and aggregation
         self.sage = SAGEConv(hidden_channels, hidden_channels, aggr=aggr)
-        # Final MixHopConv for output refinement
         self.mixhop2 = MixHopConv(hidden_channels, out_channels, powers=[0])
         self.dropout = dropout
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
 
-        # Stage 1: Initial feature transformation
         x = self.mixhop1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 2: GraphSAGE neighborhood sampling
         x = self.sage(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
 
-        # Stage 3: Final output refinement
         x = self.mixhop2(x, edge_index)
 
         out = F.log_softmax(x, dim=1)
@@ -968,8 +936,6 @@ def run_full_pipeline():
     best_model = MODEL_CHOICES[best['model']]
     best_hidden_channels = HIDDEN_CHANNEL_CHOICES[best['hidden_channels']]
     best_num_heads = NUM_HEAD_CHOICES[best['num_heads']]
-    best_dropout = best['dropout']  # hp.uniform returns actual value
-    best_lr = best['lr']  # hp.loguniform returns actual value
 
     # Validate parameters to ensure they're reasonable
     best_hidden_channels = max(best_hidden_channels, 64)  # Ensure at least 64

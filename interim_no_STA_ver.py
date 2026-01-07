@@ -6,7 +6,6 @@ Name: Yuen Tsz Ki
 import os
 import numpy as np
 import pandas as pd
-from collections import Counter
 import random
 
 import torch
@@ -53,23 +52,16 @@ def create_model_configs(data, best_hidden_channels, best_num_heads, dropout_val
 
 class FocalLoss(nn.Module):
     """Focal Loss for addressing class imbalance"""
-    def __init__(self, alpha=1, gamma=2, reduction='mean'):
+    def __init__(self, alpha=1, gamma=2):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
-        self.reduction = reduction
 
     def forward(self, inputs, targets):
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
+        return focal_loss.mean()
 
 # -----------------------
 # Model definitions
