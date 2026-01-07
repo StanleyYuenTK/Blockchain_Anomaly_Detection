@@ -6,7 +6,6 @@ Name: Yuen Tsz Ki
 import os
 import numpy as np
 import pandas as pd
-from collections import Counter
 import random
 
 import torch
@@ -53,23 +52,16 @@ def create_model_configs(data, best_hidden_channels, best_num_heads, dropout_val
 
 class FocalLoss(nn.Module):
     """Focal Loss for addressing class imbalance"""
-    def __init__(self, alpha=1, gamma=2, reduction='mean'):
+    def __init__(self, alpha=1, gamma=2):
         super(FocalLoss, self).__init__()
         self.alpha = alpha
         self.gamma = gamma
-        self.reduction = reduction
 
     def forward(self, inputs, targets):
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-
-        if self.reduction == 'mean':
-            return focal_loss.mean()
-        elif self.reduction == 'sum':
-            return focal_loss.sum()
-        else:
-            return focal_loss
+        return focal_loss.mean()
 
 # -----------------------
 # Model definitions
@@ -335,7 +327,7 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
 class IsolationForestBaseline:
     """Baseline model using Isolation Forest for anomaly detection"""
 
-    def __init__(self, n_estimators=100, max_samples='auto', random_state=42, contamination='auto'):
+    def __init__(self, n_estimators=100, max_samples='auto', random_state=24027277, contamination='auto'):
         self.n_estimators = n_estimators
         self.max_samples = max_samples
         self.random_state = random_state
@@ -769,9 +761,9 @@ def hyperopt_objective(data, device, params):
         dict: Dictionary with loss value and additional metrics for hyperopt
     """
     # Set random seeds for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
-    random.seed(42)
+    torch.manual_seed(24027277)
+    np.random.seed(24027277)
+    random.seed(24027277)
 
     # Hyperopt returns actual values, not indices
     model_name = params['model']
@@ -902,7 +894,7 @@ def run_full_pipeline():
     baseline_model = IsolationForestBaseline(
         n_estimators=100,
         contamination='auto',  # Auto-calculate from training data
-        random_state=42
+        random_state=24027277
     )
     baseline_model.fit(data)
     baseline_results = baseline_model.evaluate(data)
@@ -944,7 +936,7 @@ def run_full_pipeline():
         algo=tpe.suggest,
         max_evals=4,  # set 1 for my computer performance
         trials=trials,
-        rstate=np.random.default_rng(42)
+        rstate=np.random.default_rng(24027277)
     )
 
     # Convert indices back to actual values (hp.choice returns indices, not values)
