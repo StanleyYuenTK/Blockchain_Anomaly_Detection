@@ -187,7 +187,7 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
             ax.set_ylim(0, 1.0)
 
         # Rotate x-axis labels for better readability
-        plt.xticks(rotation=45, ha='right', fontsize=12)
+        plt.xticks(rotation=45, ha='right', fontsize=18)
 
         # Add grid
         ax.grid(True, alpha=0.3, axis='y')
@@ -416,9 +416,3 @@ def generate_standard_gnn_visualizations(results_collector, training_histories, 
         print("Ensemble summary saved to: results/final_ensemble_summary.png")
     else:
         print("Warning: No ensemble metrics available for summary")
-
-
-# if __name__ == '__main__':
-#     # All visualization functions are now used through the main pipeline files
-#     # No standalone execution needed
-#     pass

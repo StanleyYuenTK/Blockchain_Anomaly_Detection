@@ -190,10 +190,10 @@ MODEL_CLASSES = {
 # GAN Data Augmentation
 # -----------------------
 
-class Generator(nn.Module):
+class GAN_Generator(nn.Module):
     """Simple GAN Generator for data augmentation"""
     def __init__(self, input_dim, hidden_dim, output_dim):
-        super(Generator, self).__init__()
+        super(GAN_Generator, self).__init__()
         self.model = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -209,10 +209,10 @@ class Generator(nn.Module):
         return self.model(z)
 
 
-class Discriminator(nn.Module):
+class GAN_Discriminator(nn.Module):
     """Simple GAN Discriminator for data augmentation"""
     def __init__(self, input_dim, hidden_dim):
-        super(Discriminator, self).__init__()
+        super(GAN_Discriminator, self).__init__()
         self.model = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LeakyReLU(0.2),
@@ -245,8 +245,8 @@ def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=12
 
     # Initialize GAN models
     feature_dim = data.x.size(1)
-    generator = Generator(latent_dim, hidden_dim, feature_dim).to(device)
-    discriminator = Discriminator(feature_dim, hidden_dim).to(device)
+    generator = GAN_Generator(latent_dim, hidden_dim, feature_dim).to(device)
+    discriminator = GAN_Discriminator(feature_dim, hidden_dim).to(device)
 
     # Optimizers
     g_optimizer = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
@@ -478,7 +478,7 @@ def load_elliptic_data(dataset_dir='../Dataset'):
 
     print(f"Loaded {x.size(0)} nodes with {x.size(1)} features (expected: 166)")
 
-    # Convert labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), else -> -1 (Unknown)
+    # Convert labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), else -> -1 (unknown)
     labels = nodes_df['class'].apply(lambda c: 0 if c == '2' else (1 if c == '1' else -1))
     y = torch.tensor(labels.values, dtype=torch.long)
 
@@ -489,9 +489,9 @@ def load_elliptic_data(dataset_dir='../Dataset'):
     unknown_count = (y == -1).sum().item()
 
     print(f"Label distribution:")
-    print(f"class1 (Illicit): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
+    print(f"class1 (illicit): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
     print(f"class2 (licit): {licit_count} nodes ({licit_count/total_nodes*100:.1f}%)")
-    print(f"class-1 (Unknown): {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
+    print(f"class unknown: {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
 
     # Build transaction ID mapping
     tx_ids = nodes_df['txId'].values
@@ -620,7 +620,7 @@ class Trainer:
             probs = torch.exp(out).cpu().numpy()
             test_mask_np = self.data.test_mask.cpu().numpy()
 
-            # Illicit class metrics (Class 1)
+            # illicit class metrics (Class 1)
             test_precision_illicit = precision_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
             test_recall_illicit = recall_score(test_y_true, test_y_pred, pos_label=1, zero_division=0)
 
