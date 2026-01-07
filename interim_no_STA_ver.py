@@ -934,7 +934,7 @@ def run_full_pipeline():
         objective_with_data,
         space=space,
         algo=tpe.suggest,
-        max_evals=4,  # set 1 for my computer performance
+        max_evals=1,  # set 1 for my computer performance
         trials=trials,
         rstate=np.random.default_rng(24027277)
     )
