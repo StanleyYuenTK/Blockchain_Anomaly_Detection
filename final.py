@@ -24,14 +24,14 @@ warnings.filterwarnings('ignore')
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.data import Data, NeighborLoader
+from torch_geometric.data import Data
+from torch_geometric.loader import NeighborLoader
 from torch_geometric.nn import (
     GCNConv, GATConv, SAGEConv, GINConv, MLP, 
-    APPNP, ChebConv, GCNIIConv, MixHopConv,
-    Degree, PersonalizedPageRank
+    APPNP, ChebConv, GCN2Conv, MixHopConv
 )
 from torch_geometric.transforms import NormalizeFeatures
-from torch_geometric.utils import degree as pyg_degree
+from torch_geometric.utils import degree as pyg_degree, get_ppr
 
 from sklearn.metrics import f1_score, accuracy_score, classification_report, roc_auc_score, recall_score, precision_score
 from sklearn.ensemble import IsolationForest
@@ -87,36 +87,76 @@ class GraphFeatureEngineer:
         
         return degree_features
     
-    def compute_pagerank_features(self, num_iterations=20):
-        """Compute Personalized PageRank features"""
-        print("Computing PageRank features...")
+    def compute_pagerank_features(self, alpha=0.2, eps=1e-5):
+        """Compute Personalized PageRank features using get_ppr
         
-        # Compute Personalized PageRank
-        # For anomaly detection, we compute PageRank from illegal nodes (class 1)
-        # This helps identify nodes that are connected to illegal entities
+        Uses the get_ppr function from PyG to compute personalized PageRank vectors.
+        For anomaly detection, computes:
+        1. Standard PageRank (from all nodes)
+        2. PPR from illegal nodes (class 1) - identifies nodes connected to illicit entities
+        """
+        print("Computing PageRank features using get_ppr...")
         
-        # Create a mask for known illegal nodes (for personalization)
+        # Method 1: Compute standard PageRank-like values using get_ppr with full nodes
+        # get_ppr computes PPR vectors - we aggregate to get node importance
+        
+        # For standard PageRank, use uniform distribution over all nodes
+        # Compute PPR from a sample of nodes to estimate overall importance
+        sample_size = min(100, self.num_nodes)
+        sample_indices = torch.randperm(self.num_nodes)[:sample_size]
+        
+        ppr_importance = torch.zeros(self.num_nodes)
+        
+        for idx in sample_indices:
+            # target must be a tensor
+            target_tensor = torch.tensor([idx.item() if idx.dim() > 0 else idx], dtype=torch.long)
+            ppr_edge_index, ppr_weight = get_ppr(
+                self.edge_index, 
+                alpha=alpha, 
+                eps=eps, 
+                target=target_tensor, 
+                num_nodes=self.num_nodes
+            )
+            # Aggregate PPR values as node importance
+            if ppr_weight.numel() > 0:
+                # Add to source nodes
+                ppr_importance[ppr_edge_index[0]] += ppr_weight
+        
+        # Normalize by sample size
+        pr_values = ppr_importance / sample_size
+        
+        # Method 2: Compute PPR from illegal nodes for anomaly detection
         labels = self.data.y.cpu()
-        illegal_mask = (labels == 1)
+        illegal_indices = torch.where(labels == 1)[0]
         
-        # Compute standard PageRank first
-        pagerank = PersonalizedPageRank(num_iterations=num_iterations)
-        pr_values = pagerank(self.edge_index, torch.ones(self.num_nodes) / self.num_nodes)
+        ppr_illegal = torch.zeros(self.num_nodes)
         
-        # Compute personalized PageRank from illegal nodes
-        # Start with uniform distribution over illegal nodes
-        illegal_probs = torch.zeros(self.num_nodes)
-        illegal_probs[illegal_mask] = 1.0 / max(illegal_mask.sum(), 1)
-        
-        # Personalized PageRank
-        ppr_values = pagerank(self.edge_index, illegal_probs)
+        if len(illegal_indices) > 0:
+            # Sample illegal nodes if too many
+            max_illegal_samples = min(50, len(illegal_indices))
+            illegal_sample = illegal_indices[torch.randperm(len(illegal_indices))[:max_illegal_samples]]
+            
+            for idx in illegal_sample:
+                # target must be a tensor
+                target_tensor = torch.tensor([idx.item() if idx.dim() > 0 else idx], dtype=torch.long)
+                ppr_edge_index, ppr_weight = get_ppr(
+                    self.edge_index,
+                    alpha=alpha,
+                    eps=eps,
+                    target=target_tensor,
+                    num_nodes=self.num_nodes
+                )
+                if ppr_weight.numel() > 0:
+                    ppr_illegal[ppr_edge_index[0]] += ppr_weight
+            
+            ppr_illegal = ppr_illegal / max_illegal_samples
         
         # Combine features
         pagerank_features = torch.stack([
-            pr_values, 
-            ppr_values,
-            pr_values * ppr_values,  # Interaction
-            (pr_values + ppr_values) / 2  # Average
+            pr_values,                      # Standard PageRank importance
+            ppr_illegal,                    # PPR from illegal nodes
+            pr_values * ppr_illegal,        # Interaction
+            (pr_values + ppr_illegal) / 2   # Average
         ], dim=1)
         
         return pagerank_features
@@ -474,32 +514,53 @@ class ChebNetModel(torch.nn.Module):
 
 
 class GCNIIModel(torch.nn.Module):
-    """GCNII (Graph Convolutional Networks with Initial Residual and Identity Mapping)"""
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, alpha=0.1, beta=1.0, num_layers=2):
+    """GCNII (Graph Convolutional Networks with Initial Residual and Identity Mapping)
+    
+    From "Simple and Deep Graph Convolutional Networks" paper.
+    Uses GCN2Conv which combines:
+    - Initial residual: (1-α)PX + αX⁽⁰⁾
+    - Identity mapping: (1-β)I + βΘ
+    This allows deeper networks without over-smoothing.
+    """
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, 
+                 alpha=0.5, theta=1.0, num_layers=2):
         super(GCNIIModel, self).__init__()
         self.alpha = alpha
-        self.beta = beta
+        self.theta = theta
         self.dropout = dropout
+        self.num_layers = num_layers
         
+        # Input projection to hidden dimension
         self.input_proj = nn.Linear(in_channels, hidden_channels)
-        self.hidden_convs = nn.ModuleList([
-            GCNIIConv(hidden_channels, alpha=alpha, beta=beta, layer=i+1)
+        
+        # GCN2Conv layers - note: channels must match hidden_channels
+        self.convs = nn.ModuleList([
+            GCN2Conv(
+                channels=hidden_channels, 
+                alpha=alpha, 
+                theta=theta, 
+                layer=i+1,
+                shared_weights=True,
+                add_self_loops=True,
+                normalize=True
+            )
             for i in range(num_layers)
         ])
+        
+        # Output projection
         self.output_proj = nn.Linear(hidden_channels, out_channels)
 
     def forward(self, data, return_embed=False):
         x, edge_index = data.x, data.edge_index
         
-        # Input projection
-        x = self.input_proj(x)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        features = [x.clone()]
+        # Save initial features for residual connections
+        x_0 = self.input_proj(x)
+        x = x_0
         
-        # Hidden layers
-        for conv in self.hidden_convs:
-            x = conv(x, edge_index)
+        # Apply GCN2Conv layers
+        features = [x.clone()]
+        for conv in self.convs:
+            x = conv(x, x_0, edge_index)
             x = F.relu(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
             features.append(x.clone())
@@ -509,7 +570,7 @@ class GCNIIModel(torch.nn.Module):
         out = F.log_softmax(x, dim=1)
         
         if return_embed:
-            embed = features[-1] if features else data.x
+            embed = features[-1] if features else x_0
             return out, embed
         return out
 
