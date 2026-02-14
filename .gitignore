@@ -3,10 +3,12 @@ edges.csv
 
 # Python
 __pycache__/
+.cursor/
 *.pyc
 
 # Logs
 *.log
 training_log.txt
-backup/
+# backup/
 Dataset/
+
