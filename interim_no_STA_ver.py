@@ -1,6 +1,22 @@
 """
 Student ID: 24027277d
 Name: Yuen Tsz Ki
+
+pytorch all model list: https://pytorch-geometric.readthedocs.io/en/2.5.1/modules/nn.html
+
+#GCN: 
+https://pytorch-geometric.readthedocs.io/en/2.7.0/generated/torch_geometric.nn.models.GCN.html
+https://pytorch-geometric.readthedocs.io/en/latest/get_started/introduction.html?referrer=grok.com#learning-methods-on-graphs
+#GAT:
+#GraphSAGE:
+#GIN:
+
+#Ensemble Model:
+import ensemble_gnn as egnn
+https://github.com/pievos101/Ensemble-GNN
+
+#Focal Loss: 
+# https://focal-loss-pytorch.readthedocs.io/en/latest/
 """
 
 import os
@@ -23,159 +39,10 @@ from functools import partial
 from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations
 
 
-def create_model_configs(data, best_hidden_channels, best_num_heads, dropout_value):
-    """Create model parameter configurations for all GNN models"""
-    base_config = {
-        'in_channels': data.x.size(1),
-        'hidden_channels': best_hidden_channels,
-        'out_channels': 2,
-        # 'num_layers': 2,  # Fixed to 2 layers
-        'dropout': dropout_value
-    }
-
-    configs = {
-        'GCN': base_config.copy(),
-        'GIN': base_config.copy(),
-        'GraphSAGE': base_config.copy(),
-        'GAT': {
-            **base_config,
-            'num_heads': best_num_heads
-        }
-    }
-
-    return configs
 
 
 # -----------------------
-# Loss Functions
-# -----------------------
-
-class FocalLoss(nn.Module):
-    """Focal Loss for addressing class imbalance"""
-    def __init__(self, alpha=1, gamma=2):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-
-    def forward(self, inputs, targets):
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        pt = torch.exp(-ce_loss)
-        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
-        return focal_loss.mean()
-
-# -----------------------
-# Model definitions
-# -----------------------
-
-class BaseGNN(nn.Module):
-    """Provide unified forward(self, data, return_embed=False) interface"""
-    def forward(self, data, return_embed=False):
-        raise NotImplementedError
-
-
-class GCNModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
-        super(GCNModel, self).__init__()
-        self.hidden_channels = hidden_channels
-        self.convs = nn.ModuleList()
-        self.convs.append(GCNConv(in_channels, hidden_channels))
-        self.convs.append(GCNConv(hidden_channels, out_channels))
-        self.dropout = dropout
-
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
-        features = []
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            features.append(x.clone())
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
-        out = F.log_softmax(x, dim=1)
-        if return_embed:
-            # Return the last hidden representation (if no hidden layers, return input)
-            embed = features[-1] if features else data.x
-            return out, embed
-        return out
-
-
-class GATModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, dropout=0.5):
-        super(GATModel, self).__init__()
-        self.num_heads = num_heads
-        self.convs = nn.ModuleList()
-        self.convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
-        self.convs.append(GATConv(hidden_channels * num_heads, out_channels, heads=1, dropout=dropout, concat=False))
-        self.dropout = dropout
-
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
-        features = []
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            features.append(x.clone())
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
-        out = F.log_softmax(x, dim=1)
-        if return_embed:
-            embed = features[-1] if features else data.x
-            return out, embed
-        return out
-
-
-class GraphSAGEModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, aggr='mean'):
-        super(GraphSAGEModel, self).__init__()
-        self.convs = nn.ModuleList()
-        self.convs.append(SAGEConv(in_channels, hidden_channels, aggr=aggr))
-        self.convs.append(SAGEConv(hidden_channels, out_channels, aggr=aggr))
-        self.dropout = dropout
-
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
-        features = []
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            features.append(x.clone())
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
-        out = F.log_softmax(x, dim=1)
-        if return_embed:
-            embed = features[-1] if features else data.x
-            return out, embed
-        return out
-
-
-class GINModel(BaseGNN):
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
-        super(GINModel, self).__init__()
-        self.convs = nn.ModuleList()
-        # mlp_channels = [in_channels, hidden_channels, hidden_channels]
-        self.convs.append(GINConv(MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout)))
-        # mlp_channels = [hidden_channels, hidden_channels, out_channels]
-        self.convs.append(GINConv(MLP([hidden_channels, hidden_channels, out_channels], dropout=dropout)))
-        self.dropout = dropout
-
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
-        features = []
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index)
-            x = F.relu(x)
-            features.append(x.clone())
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
-        out = F.log_softmax(x, dim=1)
-        if return_embed:
-            embed = features[-1] if features else data.x
-            return out, embed
-        return out
-
-
-# -----------------------
-# GAN Data Augmentation
+# Data Procressing
 # -----------------------
 
 class GAN_Generator(nn.Module):
@@ -216,112 +83,21 @@ class GAN_Discriminator(nn.Module):
         return self.model(x)
 
 
-# Model class mapping for cleaner code
-MODEL_CLASSES = {
-    'GCN': GCNModel,
-    'GAT': GATModel,
-    'GIN': GINModel,
-    'GraphSAGE': GraphSAGEModel
-}
+class FocalLoss(nn.Module):
+    """Focal Loss for addressing class imbalance"""
+    def __init__(self, alpha=1, gamma=2):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
 
-
-def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=128, num_epochs=100, augment_ratio=0.5):
-    """Use GAN to generate additional illegal (class 1) samples"""
-
-    # Extract illegal samples (class 1)
-    illegal_mask = (data.y == 1)
-    illegal_features = data.x[illegal_mask]
-    num_illegal = illegal_features.size(0)
-    num_to_generate = int(num_illegal * augment_ratio)
-
-    if num_illegal == 0:
-        print("No illegal samples found, skipping GAN augmentation")
-        return data
-
-    print(f"Found {num_illegal} illegal samples, will generate {num_to_generate} additional samples")
-
-    # Initialize GAN models
-    feature_dim = data.x.size(1)
-    generator = GAN_Generator(latent_dim, hidden_dim, feature_dim).to(device)
-    discriminator = GAN_Discriminator(feature_dim, hidden_dim).to(device)
-
-    # Optimizers
-    g_optimizer = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
-    d_optimizer = torch.optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
-
-    # Loss function
-    criterion = nn.BCELoss()
-
-    # Training data for discriminator
-    real_labels = torch.ones(num_illegal, 1).to(device)
-    fake_labels = torch.zeros(num_illegal, 1).to(device)
-
-    # Training loop
-    for epoch in range(num_epochs):
-        # Train Discriminator
-        d_optimizer.zero_grad()
-
-        # Real samples
-        real_output = discriminator(illegal_features)
-        d_loss_real = criterion(real_output, real_labels)
-
-        # Fake samples
-        z = torch.randn(num_illegal, latent_dim).to(device)
-        fake_features = generator(z)
-        fake_output = discriminator(fake_features.detach())
-        d_loss_fake = criterion(fake_output, fake_labels)
-
-        d_loss = d_loss_real + d_loss_fake
-        d_loss.backward()
-        d_optimizer.step()
-
-        # Train Generator
-        g_optimizer.zero_grad()
-        fake_output = discriminator(fake_features)
-        g_loss = criterion(fake_output, real_labels)  # Generator wants discriminator to think fake is real
-        g_loss.backward()
-        g_optimizer.step()
-
-        if (epoch + 1) % 20 == 0:
-            print(f"GAN Epoch [{epoch+1}/{num_epochs}], D Loss: {d_loss.item():.4f}, G Loss: {g_loss.item():.4f}")
-
-    # Generate new samples
-    generator.eval()
-    with torch.no_grad():
-        z = torch.randn(num_to_generate, latent_dim).to(device)
-        generated_features = generator(z)
-
-        # Add small noise to make samples more diverse
-        noise = torch.randn_like(generated_features) * 0.1
-        generated_features = generated_features + noise
-
-    # Create new data with augmented samples (keep all tensors on the same device)
-    new_x = torch.cat([data.x, generated_features], dim=0)
-    new_y = torch.cat([data.y, torch.ones(num_to_generate, dtype=torch.long).to(device)], dim=0)
-
-    # Create new masks (keep original train/val/test split, add new samples to training)
-    new_train_mask = torch.cat([data.train_mask, torch.ones(num_to_generate, dtype=torch.bool).to(device)], dim=0)
-    new_val_mask = torch.cat([data.val_mask, torch.zeros(num_to_generate, dtype=torch.bool).to(device)], dim=0)
-    new_test_mask = torch.cat([data.test_mask, torch.zeros(num_to_generate, dtype=torch.bool).to(device)], dim=0)
-
-    # Create augmented data object
-    augmented_data = Data(
-        x=new_x,
-        y=new_y,
-        edge_index=data.edge_index,  # Keep original edges
-        train_mask=new_train_mask,
-        val_mask=new_val_mask,
-        test_mask=new_test_mask
-    )
-
-    # Move augmented data back to the specified device
-    augmented_data = augmented_data.to(device)
-
-    print(f"GAN augmentation completed: added {num_to_generate} synthetic illegal samples")
-    return augmented_data
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        return focal_loss.mean()
 
 # -----------------------
-# Isolation Forest Baseline
+# Model definitions
 # -----------------------
 
 class IsolationForestBaseline:
@@ -428,120 +204,158 @@ class IsolationForestBaseline:
 
         return results
 
-# -----------------------
-# Data Loading
-# -----------------------
 
-def load_elliptic_data(dataset_dir='../Dataset'):
-    """
-    Load Elliptic Bitcoin transaction dataset.
+class GCNModel(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
+        super().__init__()
+        self.hidden_channels = hidden_channels
+        self.convs = nn.ModuleList()
+        self.convs.append(GCNConv(in_channels, hidden_channels))
+        self.convs.append(GCNConv(hidden_channels, out_channels))
+        self.dropout = dropout
 
-    Dataset Description:
-    - 203,769 nodes (transactions), 234,355 edges
-    - Each node has 166 features (after excluding txId, timestep, and class)
-    - Labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), 'unknown' -> -1
-    - Time steps: 1-49 (about 2 weeks each)
-    - Known labels: 4,545 illicit (2%), 42,019 licit (21%), rest unknown
-
-    Returns:
-        PyTorch Geometric Data object with x, y, edge_index, and masks
-    """
-    print("Loading Elliptic dataset...")
-
-    classes_path = os.path.join(dataset_dir, 'elliptic_txs_classes.csv')
-    edgelist_path = os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv')
-    features_path = os.path.join(dataset_dir, 'elliptic_txs_features.csv')
-
-    # Load data
-    classes_df = pd.read_csv(classes_path)
-    edgelist_df = pd.read_csv(edgelist_path)
-    features_df = pd.read_csv(features_path, header=None)
-
-    # Rename columns for clarity
-    features_df.rename(columns={0: 'txId', 1: 'timestep'}, inplace=True)
-    features_df.columns = ['txId', 'timestep'] + [f'feature_{i}' for i in range(2, features_df.shape[1])]
-
-    # Merge features with classes
-    nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
-
-    # Extract features (exclude txId, timestep, and class columns)
-    # Should result in 166 features as per dataset description
-    feature_columns = nodes_df.columns[2:-1]  # Skip txId (0), timestep (1), and class (last)
-    features = nodes_df[feature_columns].values
-    x = torch.tensor(features, dtype=torch.float)
-
-    print(f"Loaded {x.size(0)} nodes with {x.size(1)} features (expected: 166)")
-
-    # Convert labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), else -> -1 (unknown)
-    labels = nodes_df['class'].apply(lambda c: 0 if c == '2' else (1 if c == '1' else -1))
-    y = torch.tensor(labels.values, dtype=torch.long)
-
-    # Print label statistics
-    total_nodes = len(y)
-    licit_count = (y == 0).sum().item()
-    illicit_count = (y == 1).sum().item()
-    unknown_count = (y == -1).sum().item()
-
-    print(f"Label distribution:")
-    print(f"class1 (illicit): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
-    print(f"class2 (licit): {licit_count} nodes ({licit_count/total_nodes*100:.1f}%)")
-    print(f"class unknown: {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
-    # Build transaction ID mapping
-    tx_ids = nodes_df['txId'].values
-    tx_id_map = {tx_id: i for i, tx_id in enumerate(tx_ids)}
-
-    # Build edge index
-    source_indices = []
-    target_indices = []
-    for _, row in edgelist_df.iterrows():
-        src = row['txId1'] if 'txId1' in edgelist_df.columns else row.iloc[0]
-        tgt = row['txId2'] if 'txId2' in edgelist_df.columns else row.iloc[1]
-        if src in tx_id_map and tgt in tx_id_map:
-            source_indices.append(tx_id_map[src])
-            target_indices.append(tx_id_map[tgt])
-
-    edge_index = torch.tensor([source_indices, target_indices], dtype=torch.long)
-    print(f"Graph structure: {edge_index.size(1)} edges")
-
-    # Extract timesteps
-    timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
-
-    # Create PyTorch Geometric Data object
-    data = Data(x=x, y=y, edge_index=edge_index)
-    data.timesteps = timesteps
-
-    # Create masks for train/val/test splits
-    # Time-based split: timesteps 1-34 (train), 35-41 (val), 42-49 (test)
-    known_mask = y != -1  # Only use known labels
-    data.train_mask = (timesteps < 35) & known_mask
-    data.val_mask = (timesteps >= 35) & (timesteps < 42) & known_mask
-    data.test_mask = (timesteps >= 42) & known_mask
-
-    # Print split statistics
-    train_count = data.train_mask.sum().item()
-    val_count = data.val_mask.sum().item()
-    test_count = data.test_mask.sum().item()
-
-    print(f"Data splits (known labels only):")
-    print(f"  Train: {train_count} nodes (timesteps 1-34)")
-    print(f"  Validation: {val_count} nodes (timesteps 35-41)")
-    print(f"  Test: {test_count} nodes (timesteps 42-49)")
-
-    # Print class distribution in test set
-    test_labels = y[data.test_mask]
-    test_licit = (test_labels == 0).sum().item()
-    test_illicit = (test_labels == 1).sum().item()
-    print(f"Test set class distribution:")
-    print(f"  licit: {test_licit} ({test_licit/test_count*100:.1f}%)")
-    print(f"  illicit: {test_illicit} ({test_illicit/test_count*100:.1f}%)")
-
-    return data
+    def forward(self, data, return_embed=False):
+        x, edge_index = data.x, data.edge_index
+        features = []
+        for conv in self.convs[:-1]:
+            x = conv(x, edge_index)
+            x = F.relu(x)
+            features.append(x.clone())
+            x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.convs[-1](x, edge_index)
+        out = F.log_softmax(x, dim=1)
+        if return_embed:
+            # Return the last hidden representation (if no hidden layers, return input)
+            embed = features[-1] if features else data.x
+            return out, embed
+        return out
 
 
+class GATModel(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=8, dropout=0.5):
+        super(GATModel, self).__init__()
+        self.num_heads = num_heads
+        self.convs = nn.ModuleList()
+        self.convs.append(GATConv(in_channels, hidden_channels, heads=num_heads, dropout=dropout, concat=True))
+        self.convs.append(GATConv(hidden_channels * num_heads, out_channels, heads=1, dropout=dropout, concat=False))
+        self.dropout = dropout
 
-# -----------------------
-# Trainer Class
-# -----------------------
+    def forward(self, data, return_embed=False):
+        x, edge_index = data.x, data.edge_index
+        features = []
+        for conv in self.convs[:-1]:
+            x = conv(x, edge_index)
+            x = F.relu(x)
+            features.append(x.clone())
+            x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.convs[-1](x, edge_index)
+        out = F.log_softmax(x, dim=1)
+        if return_embed:
+            embed = features[-1] if features else data.x
+            return out, embed
+        return out
+
+
+class GraphSAGEModel(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, aggr='mean'):
+        super(GraphSAGEModel, self).__init__()
+        self.convs = nn.ModuleList()
+        self.convs.append(SAGEConv(in_channels, hidden_channels, aggr=aggr))
+        self.convs.append(SAGEConv(hidden_channels, out_channels, aggr=aggr))
+        self.dropout = dropout
+
+    def forward(self, data, return_embed=False):
+        x, edge_index = data.x, data.edge_index
+        features = []
+        for conv in self.convs[:-1]:
+            x = conv(x, edge_index)
+            x = F.relu(x)
+            features.append(x.clone())
+            x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.convs[-1](x, edge_index)
+        out = F.log_softmax(x, dim=1)
+        if return_embed:
+            embed = features[-1] if features else data.x
+            return out, embed
+        return out
+
+
+class GINModel(torch.nn.Module):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5):
+        super(GINModel, self).__init__()
+        self.convs = nn.ModuleList()
+        # mlp_channels = [in_channels, hidden_channels, hidden_channels]
+        self.convs.append(GINConv(MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout)))
+        # mlp_channels = [hidden_channels, hidden_channels, out_channels]
+        self.convs.append(GINConv(MLP([hidden_channels, hidden_channels, out_channels], dropout=dropout)))
+        self.dropout = dropout
+
+    def forward(self, data, return_embed=False):
+        x, edge_index = data.x, data.edge_index
+        features = []
+        for conv in self.convs[:-1]:
+            x = conv(x, edge_index)
+            x = F.relu(x)
+            features.append(x.clone())
+            x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.convs[-1](x, edge_index)
+        out = F.log_softmax(x, dim=1)
+        if return_embed:
+            embed = features[-1] if features else data.x
+            return out, embed
+        return out
+
+
+class FinalEnsemble:
+    """Final ensemble combining multiple single models"""
+    def __init__(self, models):
+        self.models = models  # dict of single trained models
+
+    def predict(self, data, device, test_only=False):
+        all_predictions = []
+        all_probs = []
+
+        for model_name, model in self.models.items():
+            model.eval()
+            with torch.no_grad():
+                output = model(data)
+                probs = torch.exp(output).cpu().numpy()
+                pred = np.argmax(probs, axis=1)
+                all_predictions.append(pred)
+                all_probs.append(probs)
+
+        # Final soft voting
+        final_avg_probs = np.mean(all_probs, axis=0)
+        final_pred = np.argmax(final_avg_probs, axis=1)
+
+        if test_only:
+            # Return only test predictions
+            test_mask_np = data.test_mask.cpu().numpy()
+            return final_pred[test_mask_np]
+        else:
+            return final_pred
+
+    def predict_proba(self, data, device, test_only=False):
+        """Return averaged probabilities from all models"""
+        all_probs = []
+
+        for model_name, model in self.models.items():
+            model.eval()
+            with torch.no_grad():
+                output = model(data)
+                probs = torch.exp(output).cpu().numpy()
+                all_probs.append(probs)
+
+        # Final soft voting across all model types
+        final_avg_probs = np.mean(all_probs, axis=0)
+
+        if test_only:
+            # Return only test probabilities
+            test_mask_np = data.test_mask.cpu().numpy()
+            return final_avg_probs[test_mask_np]
+        else:
+            return final_avg_probs
+
 
 class Trainer:
     def __init__(self, model, data, device, optimizer, criterion, history=None):
@@ -691,58 +505,237 @@ class Trainer:
         return best_stats, self.history
 
 
-class FinalEnsemble:
-    """Final ensemble combining multiple single models"""
-    def __init__(self, models):
-        self.models = models  # dict of single trained models
+# Model class mapping for cleaner code
+MODEL_CLASSES = {
+    'GCN': GCNModel,
+    'GAT': GATModel,
+    'GIN': GINModel,
+    'GraphSAGE': GraphSAGEModel
+}
 
-    def predict(self, data, device, test_only=False):
-        all_predictions = []
-        all_probs = []
+def load_elliptic_data(dataset_dir='../Dataset'):
+    """
+    Load Elliptic Bitcoin transaction dataset.
 
-        for model_name, model in self.models.items():
-            model.eval()
-            with torch.no_grad():
-                output = model(data)
-                probs = torch.exp(output).cpu().numpy()
-                pred = np.argmax(probs, axis=1)
-                all_predictions.append(pred)
-                all_probs.append(probs)
+    Dataset Description:
+    - 203,769 nodes (transactions), 234,355 edges
+    - Each node has 166 features (after excluding txId, timestep, and class)
+    - Labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), 'unknown' -> -1
+    - Time steps: 1-49 (about 2 weeks each)
+    - Known labels: 4,545 illicit (2%), 42,019 licit (21%), rest unknown
 
-        # Final soft voting
-        final_avg_probs = np.mean(all_probs, axis=0)
-        final_pred = np.argmax(final_avg_probs, axis=1)
+    Returns:
+        PyTorch Geometric Data object with x, y, edge_index, and masks
+    """
+    print("Loading Elliptic dataset...")
 
-        if test_only:
-            # Return only test predictions
-            test_mask_np = data.test_mask.cpu().numpy()
-            return final_pred[test_mask_np]
-        else:
-            return final_pred
+    classes_path = os.path.join(dataset_dir, 'elliptic_txs_classes.csv')
+    edgelist_path = os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv')
+    features_path = os.path.join(dataset_dir, 'elliptic_txs_features.csv')
 
-    def predict_proba(self, data, device, test_only=False):
-        """Return averaged probabilities from all models"""
-        all_probs = []
+    # Load data
+    classes_df = pd.read_csv(classes_path)
+    edgelist_df = pd.read_csv(edgelist_path)
+    features_df = pd.read_csv(features_path, header=None)
 
-        for model_name, model in self.models.items():
-            model.eval()
-            with torch.no_grad():
-                output = model(data)
-                probs = torch.exp(output).cpu().numpy()
-                all_probs.append(probs)
+    # Rename columns for clarity
+    features_df.rename(columns={0: 'txId', 1: 'timestep'}, inplace=True)
+    features_df.columns = ['txId', 'timestep'] + [f'feature_{i}' for i in range(2, features_df.shape[1])]
 
-        # Final soft voting across all model types
-        final_avg_probs = np.mean(all_probs, axis=0)
+    # Merge features with classes
+    nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
 
-        if test_only:
-            # Return only test probabilities
-            test_mask_np = data.test_mask.cpu().numpy()
-            return final_avg_probs[test_mask_np]
-        else:
-            return final_avg_probs
+    # Extract features (exclude txId, timestep, and class columns)
+    # Should result in 166 features as per dataset description
+    feature_columns = nodes_df.columns[2:-1]  # Skip txId (0), timestep (1), and class (last)
+    features = nodes_df[feature_columns].values
+    x = torch.tensor(features, dtype=torch.float)
+
+    print(f"Loaded {x.size(0)} nodes with {x.size(1)} features (expected: 166)")
+
+    # Convert labels: '2'/'licit' -> 0 (licit), '1'/'illicit' -> 1 (illicit), else -> -1 (unknown)
+    labels = nodes_df['class'].apply(lambda c: 0 if c == '2' else (1 if c == '1' else -1))
+    y = torch.tensor(labels.values, dtype=torch.long)
+
+    # Print label statistics
+    total_nodes = len(y)
+    licit_count = (y == 0).sum().item()
+    illicit_count = (y == 1).sum().item()
+    unknown_count = (y == -1).sum().item()
+
+    print(f"Label distribution:")
+    print(f"class1 (illicit): {illicit_count} nodes ({illicit_count/total_nodes*100:.1f}%)")
+    print(f"class2 (licit): {licit_count} nodes ({licit_count/total_nodes*100:.1f}%)")
+    print(f"class unknown: {unknown_count} nodes ({unknown_count/total_nodes*100:.1f}%)")
+    # Build transaction ID mapping
+    tx_ids = nodes_df['txId'].values
+    tx_id_map = {tx_id: i for i, tx_id in enumerate(tx_ids)}
+
+    # Build edge index
+    source_indices = []
+    target_indices = []
+    for _, row in edgelist_df.iterrows():
+        src = row['txId1'] if 'txId1' in edgelist_df.columns else row.iloc[0]
+        tgt = row['txId2'] if 'txId2' in edgelist_df.columns else row.iloc[1]
+        if src in tx_id_map and tgt in tx_id_map:
+            source_indices.append(tx_id_map[src])
+            target_indices.append(tx_id_map[tgt])
+
+    edge_index = torch.tensor([source_indices, target_indices], dtype=torch.long)
+    print(f"Graph structure: {edge_index.size(1)} edges")
+
+    # Extract timesteps
+    timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
+
+    # Create PyTorch Geometric Data object
+    data = Data(x=x, y=y, edge_index=edge_index)
+    data.timesteps = timesteps
+
+    # Create masks for train/val/test splits
+    # Time-based split: timesteps 1-34 (train), 35-41 (val), 42-49 (test)
+    known_mask = y != -1  # Only use known labels
+    data.train_mask = (timesteps < 35) & known_mask
+    data.val_mask = (timesteps >= 35) & (timesteps < 42) & known_mask
+    data.test_mask = (timesteps >= 42) & known_mask
+
+    # Print split statistics
+    train_count = data.train_mask.sum().item()
+    val_count = data.val_mask.sum().item()
+    test_count = data.test_mask.sum().item()
+
+    print(f"Data splits (known labels only):")
+    print(f"  Train: {train_count} nodes (timesteps 1-34)")
+    print(f"  Validation: {val_count} nodes (timesteps 35-41)")
+    print(f"  Test: {test_count} nodes (timesteps 42-49)")
+
+    # Print class distribution in test set
+    test_labels = y[data.test_mask]
+    test_licit = (test_labels == 0).sum().item()
+    test_illicit = (test_labels == 1).sum().item()
+    print(f"Test set class distribution:")
+    print(f"  licit: {test_licit} ({test_licit/test_count*100:.1f}%)")
+    print(f"  illicit: {test_illicit} ({test_illicit/test_count*100:.1f}%)")
+
+    return data
 
 
+def create_model_configs(data, best_hidden_channels, best_num_heads, dropout_value):
+    """Create model parameter configurations for all GNN models"""
+    base_config = {
+        'in_channels': data.x.size(1),
+        'hidden_channels': best_hidden_channels,
+        'out_channels': 2,
+        # 'num_layers': 2,  # Fixed to 2 layers
+        'dropout': dropout_value
+    }
 
+    configs = {
+        'GCN': base_config.copy(),
+        'GIN': base_config.copy(),
+        'GraphSAGE': base_config.copy(),
+        'GAT': {
+            **base_config,
+            'num_heads': best_num_heads
+        }
+    }
+
+    return configs
+
+
+def augment_illegal_samples_with_gan(data, device, latent_dim=100, hidden_dim=128, num_epochs=100, augment_ratio=0.5):
+    """Use GAN to generate additional illegal (class 1) samples"""
+
+    # Extract illegal samples (class 1)
+    illegal_mask = (data.y == 1)
+    illegal_features = data.x[illegal_mask]
+    num_illegal = illegal_features.size(0)
+    num_to_generate = int(num_illegal * augment_ratio)
+
+    if num_illegal == 0:
+        print("No illegal samples found, skipping GAN augmentation")
+        return data
+
+    print(f"Found {num_illegal} illegal samples, will generate {num_to_generate} additional samples")
+
+    # Initialize GAN models
+    feature_dim = data.x.size(1)
+    generator = GAN_Generator(latent_dim, hidden_dim, feature_dim).to(device)
+    discriminator = GAN_Discriminator(feature_dim, hidden_dim).to(device)
+
+    # Optimizers
+    g_optimizer = torch.optim.Adam(generator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+    d_optimizer = torch.optim.Adam(discriminator.parameters(), lr=0.0002, betas=(0.5, 0.999))
+
+    # Loss function
+    criterion = nn.BCELoss()
+
+    # Training data for discriminator
+    real_labels = torch.ones(num_illegal, 1).to(device)
+    fake_labels = torch.zeros(num_illegal, 1).to(device)
+
+    # Training loop
+    for epoch in range(num_epochs):
+        # Train Discriminator
+        d_optimizer.zero_grad()
+
+        # Real samples
+        real_output = discriminator(illegal_features)
+        d_loss_real = criterion(real_output, real_labels)
+
+        # Fake samples
+        z = torch.randn(num_illegal, latent_dim).to(device)
+        fake_features = generator(z)
+        fake_output = discriminator(fake_features.detach())
+        d_loss_fake = criterion(fake_output, fake_labels)
+
+        d_loss = d_loss_real + d_loss_fake
+        d_loss.backward()
+        d_optimizer.step()
+
+        # Train Generator
+        g_optimizer.zero_grad()
+        fake_output = discriminator(fake_features)
+        g_loss = criterion(fake_output, real_labels)  # Generator wants discriminator to think fake is real
+        g_loss.backward()
+        g_optimizer.step()
+
+        if (epoch + 1) % 20 == 0:
+            print(f"GAN Epoch [{epoch+1}/{num_epochs}], D Loss: {d_loss.item():.4f}, G Loss: {g_loss.item():.4f}")
+
+    # Generate new samples
+    generator.eval()
+    with torch.no_grad():
+        z = torch.randn(num_to_generate, latent_dim).to(device)
+        generated_features = generator(z)
+
+        # Add small noise to make samples more diverse
+        noise = torch.randn_like(generated_features) * 0.1
+        generated_features = generated_features + noise
+
+    # Create new data with augmented samples (keep all tensors on the same device)
+    new_x = torch.cat([data.x, generated_features], dim=0)
+    new_y = torch.cat([data.y, torch.ones(num_to_generate, dtype=torch.long).to(device)], dim=0)
+
+    # Create new masks (keep original train/val/test split, add new samples to training)
+    new_train_mask = torch.cat([data.train_mask, torch.ones(num_to_generate, dtype=torch.bool).to(device)], dim=0)
+    new_val_mask = torch.cat([data.val_mask, torch.zeros(num_to_generate, dtype=torch.bool).to(device)], dim=0)
+    new_test_mask = torch.cat([data.test_mask, torch.zeros(num_to_generate, dtype=torch.bool).to(device)], dim=0)
+
+    # Create augmented data object
+    augmented_data = Data(
+        x=new_x,
+        y=new_y,
+        edge_index=data.edge_index,  # Keep original edges
+        train_mask=new_train_mask,
+        val_mask=new_val_mask,
+        test_mask=new_test_mask
+    )
+
+    # Move augmented data back to the specified device
+    augmented_data = augmented_data.to(device)
+
+    print(f"GAN augmentation completed: added {num_to_generate} synthetic illegal samples")
+    return augmented_data
 
 
 # -----------------------

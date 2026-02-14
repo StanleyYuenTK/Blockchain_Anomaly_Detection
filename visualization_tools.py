@@ -1,6 +1,8 @@
 """
 Student ID: 24027277d
 Name: Yuen Tsz Ki
+
+1. https://medium.com/data-science/graph-convolutional-networks-introduction-to-gnns-24b3f60d6c95
 """
 
 import matplotlib.pyplot as plt

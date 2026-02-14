@@ -9,3 +9,4 @@ __pycache__/
 *.log
 training_log.txt
 backup/
+Dataset/
