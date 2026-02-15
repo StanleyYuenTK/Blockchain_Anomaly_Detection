@@ -37,13 +37,8 @@ from sklearn.metrics import f1_score, accuracy_score, classification_report, roc
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 
-# from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
-# from functools import partial
-
-# Optuna for Bayesian Optimization with TPE
-import optuna
-from optuna.samplers import TPESampler
-optuna.logging.set_verbosity(optuna.logging.WARNING)
+from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
+from functools import partial
 
 try:
     from catboost import CatBoostClassifier
@@ -113,9 +108,7 @@ class GraphFeatureEngineer:
         ppr_importance = torch.zeros(self.num_nodes)
         
         for idx in sample_indices:
-            # Convert to torch tensor on CPU for TorchGeometric compatibility
-            idx_val = idx.item() if isinstance(idx, torch.Tensor) else idx
-            target_tensor = torch.tensor([idx_val], dtype=torch.long).cpu()
+            target_tensor = torch.tensor([idx.item() if idx.dim() > 0 else idx], dtype=torch.long)
             ppr_edge_index, ppr_weight = get_ppr(
                 self.edge_index, 
                 alpha=alpha, 
@@ -143,14 +136,11 @@ class GraphFeatureEngineer:
             illegal_sample = illegal_indices[torch.randperm(len(illegal_indices))[:max_illegal_samples]]
             
             for idx in illegal_sample:
-                # Convert to torch tensor on CPU for TorchGeometric compatibility
-                idx_val = idx.item() if isinstance(idx, torch.Tensor) else idx
-                target_tensor = torch.tensor([idx_val], dtype=torch.long).cpu()
                 ppr_edge_index, ppr_weight = get_ppr(
                     self.edge_index,
                     alpha=alpha,
                     eps=eps,
-                    target=target_tensor,
+                    target=idx,
                     num_nodes=self.num_nodes
                 )
                 if ppr_weight.numel() > 0:
@@ -592,27 +582,21 @@ class MixHopGCNModel(torch.nn.Module):
     MixHop learns separate weights for each hop distance, enabling the model
     to capture relationships at different neighborhood distances without
     stacking many layers (mitigating over-smoothing).
-    
-    Uses torch_geometric.nn.conv.MixHopConv with powers parameter.
     """
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2]):
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, num_hops=3):
         super(MixHopGCNModel, self).__init__()
-        self.powers = powers
-        self.num_hops = len(powers)
         
         # MixHopConv: learns to combine information from multiple hops
-        # powers=[0, 1, 2] means using adjacency matrix powers 0, 1, 2 (self, 1-hop, 2-hop)
         self.mixhop_conv = MixHopConv(
             in_channels=in_channels,
             out_channels=hidden_channels,
-            powers=powers,
-            add_self_loops=True
+            num_hops=num_hops  # Number of hop distances to consider
         )
         
         # Additional MLP to process concatenated multi-hop features
         self.mlp = MLP([
-            hidden_channels * self.num_hops,  # MixHopConv outputs concatenated features
-            hidden_channels * self.num_hops // 2,
+            hidden_channels * num_hops,  # MixHopConv outputs concatenated features
+            hidden_channels * num_hops // 2,
             out_channels
         ], dropout=dropout)
         
@@ -636,137 +620,8 @@ class MixHopGCNModel(torch.nn.Module):
 
 
 class MixHopGATModel(torch.nn.Module):
-    """GAT with MixHop for multi-hop information using MixHopConv"""
-    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=4, dropout=0.5, powers=[0, 1, 2]):
-        super(MixHopGATModel, self).__init__()
-        self.powers = powers
-        self.num_hops = len(powers)
-        
-        # Use MixHopConv for multi-hop aggregation
-        self.mixhop_conv = MixHopConv(
-            in_channels=in_channels,
-            out_channels=hidden_channels,
-            powers=powers,
-            add_self_loops=True
-        )
-        
-        # Multi-head attention after MixHop
-        self.attention = GATConv(
-            hidden_channels * self.num_hops, 
-            hidden_channels, 
-            heads=num_heads, 
-            dropout=dropout, 
-            concat=True
-        )
-        
-        # Output projection: hidden_channels * num_heads (after attention)
-        self.out_proj = nn.Linear(hidden_channels * num_heads, out_channels)
-        self.dropout = dropout
-
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
-        
-        # Apply MixHopConv for multi-hop features
-        x = self.mixhop_conv(x, edge_index)
-        x = F.relu(x)
-        
-        # Apply attention
-        x = self.attention(x, edge_index)
-        x = F.relu(x)
-        
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        
-        # Final projection
-        out = self.out_proj(x)
-        out = F.log_softmax(out, dim=1)
-        
-        if return_embed:
-            return out, x
-        return out
-
-
-class MixHopGraphSAGEModel(torch.nn.Module):
-    """GraphSAGE with MixHop using MixHopConv"""
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2], aggr='mean'):
-        super(MixHopGraphSAGEModel, self).__init__()
-        self.powers = powers
-        self.num_hops = len(powers)
-        
-        # Use MixHopConv for multi-hop aggregation
-        self.mixhop_conv = MixHopConv(
-            in_channels=in_channels,
-            out_channels=hidden_channels,
-            powers=powers,
-            add_self_loops=True
-        )
-        
-        # Additional SAGE layer
-        self.sage_conv = SAGEConv(hidden_channels * self.num_hops, hidden_channels, aggr=aggr)
-        
-        self.out_proj = nn.Linear(hidden_channels, out_channels)
-        self.dropout = dropout
-
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
-        
-        # Apply MixHopConv
-        x = self.mixhop_conv(x, edge_index)
-        x = F.relu(x)
-        
-        # Additional SAGE layer
-        x = self.sage_conv(x, edge_index)
-        x = F.relu(x)
-        
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        
-        out = self.out_proj(x)
-        out = F.log_softmax(out, dim=1)
-        
-        if return_embed:
-            return out, x
-        return out
-
-
-class MixHopGINModel(torch.nn.Module):
-    """GIN with MixHop using MixHopConv"""
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2]):
-        super(MixHopGINModel, self).__init__()
-        self.powers = powers
-        self.num_hops = len(powers)
-        
-        # Use MixHopConv for multi-hop aggregation
-        self.mixhop_conv = MixHopConv(
-            in_channels=in_channels,
-            out_channels=hidden_channels,
-            powers=powers,
-            add_self_loops=True
-        )
-        
-        # Additional GIN layer
-        self.gin_conv = GINConv(MLP([hidden_channels * self.num_hops, hidden_channels, hidden_channels], dropout=dropout))
-        
-        self.out_proj = nn.Linear(hidden_channels, out_channels)
-        self.dropout = dropout
-
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
-        
-        # Apply MixHopConv
-        x = self.mixhop_conv(x, edge_index)
-        x = F.relu(x)
-        
-        # Additional GIN layer
-        x = self.gin_conv(x, edge_index)
-        x = F.relu(x)
-        
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        
-        out = self.out_proj(x)
-        out = F.log_softmax(out, dim=1)
-        
-        if return_embed:
-            return out, x
-        return out
+    """GAT with MixHop for multi-hop information using multiple attention heads"""
+    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=4, dropout=0.5, num_hops=2):
         super(MixHopGATModel, self).__init__()
         self.num_hops = num_hops
         self.num_heads = num_heads
@@ -800,7 +655,77 @@ class MixHopGINModel(torch.nn.Module):
         out = F.log_softmax(out, dim=1)
         
         if return_embed:
-            return out, x
+            return out, hop_outputs[-1]
+        return out
+
+
+class MixHopGraphSAGEModel(torch.nn.Module):
+    """GraphSAGE with MixHop for multi-hop information"""
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, num_hops=2, aggr='mean'):
+        super(MixHopGraphSAGEModel, self).__init__()
+        self.num_hops = num_hops
+        
+        # Multiple SAGE layers for different hops
+        self.hop_convs = nn.ModuleList([
+            SAGEConv(in_channels, hidden_channels, aggr=aggr)
+            for _ in range(num_hops)
+        ])
+        
+        self.out_proj = nn.Linear(hidden_channels * num_hops, out_channels)
+        self.dropout = dropout
+
+    def forward(self, data, return_embed=False):
+        x, edge_index = data.x, data.edge_index
+        
+        hop_outputs = []
+        for conv in self.hop_convs:
+            h = conv(x, edge_index)
+            h = F.relu(h)
+            hop_outputs.append(h)
+        
+        x = torch.cat(hop_outputs, dim=1)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        
+        out = self.out_proj(x)
+        out = F.log_softmax(out, dim=1)
+        
+        if return_embed:
+            return out, hop_outputs[-1]
+        return out
+
+
+class MixHopGINModel(torch.nn.Module):
+    """GIN with MixHop for multi-hop information"""
+    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, num_hops=2):
+        super(MixHopGINModel, self).__init__()
+        self.num_hops = num_hops
+        
+        # Multiple GIN layers for different hops
+        self.hop_convs = nn.ModuleList([
+            GINConv(MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout))
+            for _ in range(num_hops)
+        ])
+        
+        self.out_proj = nn.Linear(hidden_channels * num_hops, out_channels)
+        self.dropout = dropout
+
+    def forward(self, data, return_embed=False):
+        x, edge_index = data.x, data.edge_index
+        
+        hop_outputs = []
+        for conv in self.hop_convs:
+            h = conv(x, edge_index)
+            h = F.relu(h)
+            hop_outputs.append(h)
+        
+        x = torch.cat(hop_outputs, dim=1)
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        
+        out = self.out_proj(x)
+        out = F.log_softmax(out, dim=1)
+        
+        if return_embed:
+            return out, hop_outputs[-1]
         return out
 
 
@@ -813,7 +738,7 @@ MODEL_CLASSES = {
     'APPNP': APPNPModel,
     'ChebNet': ChebNetModel,
     'GCNII': GCNIIModel,
-    # MixHop variants (using MixHopConv)
+    # MixHop variants
     'MixHop_GCN': MixHopGCNModel,
     'MixHop_GAT': MixHopGATModel,
     'MixHop_GraphSAGE': MixHopGraphSAGEModel,
@@ -949,7 +874,7 @@ class Trainer:
 # Data Loading
 # ==============================================================================
 
-def load_elliptic_data(dataset_dir='Dataset'):
+def load_elliptic_data(dataset_dir='../Dataset'):
     """Load Elliptic Bitcoin transaction dataset"""
     print("Loading Elliptic dataset...")
     
@@ -1043,94 +968,72 @@ def create_neighbor_loader(data, batch_size=512, num_neighbors=[10, 5], shuffle=
 
 
 # ==============================================================================
-# Optuna Objective Function
+# Hyperopt Objective Function
 # ==============================================================================
 
-# Global variables to store data and device for Optuna objective
-_optuna_data = None
-_optuna_device = None
-
-# All models to optimize
-ALL_MODELS_TO_OPTIMIZE = [
-    'GCN', 'GAT', 'GraphSAGE', 'GIN', 'APPNP', 'ChebNet', 'GCNII',
-    'MixHop_GCN', 'MixHop_GAT', 'MixHop_GraphSAGE', 'MixHop_GIN'
-]
-
-def set_optuna_params(data, device):
-    """Set global parameters for Optuna objective function"""
-    global _optuna_data, _optuna_device
-    _optuna_data = data
-    _optuna_device = device
-
-def optuna_objective(trial):
-    """Optuna optimization objective function - optimizes all GNN models"""
-    global _optuna_data, _optuna_device
-    
+def hyperopt_objective(data, device, params):
+    """Hyperopt optimization objective function - optimizes on GCN as representative model"""
     torch.manual_seed(24027277)
     np.random.seed(24027277)
     random.seed(24027277)
 
-    # Select model to optimize
-    model_name = trial.suggest_categorical('model_name', ALL_MODELS_TO_OPTIMIZE)
-    
-    # Suggest hyperparameters using Optuna
-    hidden_channels = trial.suggest_categorical('hidden_channels', [64, 128, 256])
-    dropout = trial.suggest_float('dropout', 0.1, 0.5, log=False)
-    lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
-    num_heads = trial.suggest_categorical('num_heads', [4, 8])
+    # Use GCN as representative model for hyperparameter optimization
+    model_name = 'GCN'
+    hidden_channels = params['hidden_channels']
+    dropout = params['dropout']
+    num_heads = params.get('num_heads', 4)
 
-    model_class = MODEL_CLASSES.get(model_name)
+    model_class = MODEL_CLASSES.get(model_name, GCNModel)
     
     try:
-        # Create model based on its type
         if model_name == 'GAT':
             model = model_class(
-                in_channels=_optuna_data.x.size(1),
+                in_channels=data.x.size(1),
                 hidden_channels=hidden_channels,
                 out_channels=2,
                 num_heads=num_heads,
                 dropout=dropout
             )
-        elif 'MixHop' in model_name:
-            model = model_class(
-                in_channels=_optuna_data.x.size(1),
-                hidden_channels=hidden_channels,
-                out_channels=2,
-                dropout=dropout
-            )
         elif model_name in ['GCNII', 'APPNP', 'ChebNet']:
             model = model_class(
-                in_channels=_optuna_data.x.size(1),
+                in_channels=data.x.size(1),
                 hidden_channels=hidden_channels,
                 out_channels=2,
                 dropout=dropout
             )
-        else:  # GCN, GraphSAGE, GIN
+        elif 'MixHop' in model_name:
             model = model_class(
-                in_channels=_optuna_data.x.size(1),
+                in_channels=data.x.size(1),
+                hidden_channels=hidden_channels,
+                out_channels=2,
+                dropout=dropout
+            )
+        else:
+            model = model_class(
+                in_channels=data.x.size(1),
                 hidden_channels=hidden_channels,
                 out_channels=2,
                 dropout=dropout
             )
 
-        model = model.to(_optuna_device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        model = model.to(device)
+        optimizer = torch.optim.Adam(model.parameters(), lr=params['lr'])
         criterion = FocalLoss(alpha=0.25, gamma=2)
 
-        trainer = Trainer(model, _optuna_data, _optuna_device, optimizer, criterion)
+        trainer = Trainer(model, data, device, optimizer, criterion)
         best_stats, _ = trainer.fit(epochs=30)
 
-        # Report intermediate values for pruning
-        trial.report(best_stats['test_f1'], step=30)
-        
-        # Check for pruning
-        if trial.should_prune():
-            raise optuna.exceptions.TrialPruned()
-
-        return best_stats['test_f1']
+        return {
+            'loss': -best_stats['test_f1'],
+            'status': STATUS_OK,
+            'test_f1': best_stats['test_f1'],
+            'test_macro_f1': best_stats['test_macro_f1'],
+            'test_macro_auc': best_stats['test_macro_auc'],
+            'test_gmean': best_stats['test_gmean']
+        }
     except Exception as e:
-        print(f"Error in Optuna objective ({model_name}): {e}")
-        return 0.0
+        print(f"Error in hyperopt objective: {e}")
+        return {'loss': 1.0, 'status': STATUS_OK}
 
 
 # ==============================================================================
@@ -1295,79 +1198,47 @@ def run_full_pipeline():
     print("Baseline evaluation completed")
 
     # ========================================================================
-    # 4. Bayesian Optimization for Hyperparameter Search (Optuna TPESampler)
+    # 4. Bayesian Optimization for Hyperparameter Search
     # ========================================================================
     print("\n4. Running Bayesian Optimization (TPE) for hyperparameter search...")
-    print(f"Optimizing all {len(ALL_MODELS_TO_OPTIMIZE)} models: {ALL_MODELS_TO_OPTIMIZE}")
     
-    # Set global parameters for Optuna objective
-    set_optuna_params(data, device)
+    # Define search space for each model type
+    # We'll optimize on GCN as representative model to save time
+    space = {
+        'hidden_channels': hp.choice('hidden_channels', [64, 128, 256]),
+        'dropout': hp.uniform('dropout', 0.1, 0.5),
+        'lr': hp.loguniform('lr', np.log(1e-4), np.log(1e-2)),
+        'num_heads': hp.choice('num_heads', [4, 8]),
+    }
     
-    # Create Optuna study with TPE sampler
-    sampler = TPESampler(
-        n_startup_trials=5,  # Random sampling for first 5 trials
-        seed=24027277
+    MODEL_CHOICES = ['GCN', 'GAT', 'GraphSAGE', 'GIN', 'APPNP', 'ChebNet', 'GCNII']
+    HIDDEN_CHANNEL_CHOICES = [64, 128, 256]
+    NUM_HEAD_CHOICES = [4, 8]
+    
+    # Run optimization on GCN as representative
+    print("Optimizing on GCN model (representative)...")
+    trials = Trials()
+    
+    objective_with_data = partial(hyperopt_objective, data, device)
+    best = fmin(
+        objective_with_data,
+        space=space,
+        algo=tpe.suggest,
+        max_evals=10,  # 10 evaluations for meaningful optimization
+        trials=trials,
+        rstate=np.random.default_rng(24027277)
     )
-    study = optuna.create_study(
-        direction='maximize',  # Maximize test F1
-        sampler=sampler,
-        pruner=optuna.pruners.MedianPruner(n_startup_trials=5)
-    )
     
-    # Run optimization with enough trials for all models
-    # Each model needs at least 2-3 trials for meaningful optimization
-    n_trials_per_model = 3
-    total_trials = len(ALL_MODELS_TO_OPTIMIZE) * n_trials_per_model
-    print(f"Running {total_trials} trials ({n_trials_per_model} trials per model)...")
-    study.optimize(optuna_objective, n_trials=total_trials, show_progress_bar=False)
+    best_hidden_channels = HIDDEN_CHANNEL_CHOICES[best['hidden_channels']]
+    best_dropout = best['dropout']
+    best_lr = best['lr']
+    best_num_heads = NUM_HEAD_CHOICES[best['num_heads']]
     
-    # Get best hyperparameters for each model from the study
-    best_params_per_model = {}
-    
-    # Group trials by model name
-    trials_by_model = {model: [] for model in ALL_MODELS_TO_OPTIMIZE}
-    for trial in study.trials:
-        if trial.value is not None and trial.params.get('model_name'):
-            model_name = trial.params['model_name']
-            trials_by_model[model_name].append(trial)
-    
-    # Find best params for each model
-    print("\nBest hyperparameters per model:")
-    print("=" * 60)
-    for model_name in ALL_MODELS_TO_OPTIMIZE:
-        model_trials = trials_by_model[model_name]
-        if model_trials:
-            # Find best trial for this model
-            best_trial = max(model_trials, key=lambda t: t.value)
-            best_params_per_model[model_name] = {
-                'hidden_channels': best_trial.params['hidden_channels'],
-                'dropout': best_trial.params['dropout'],
-                'lr': best_trial.params['lr'],
-                'num_heads': best_trial.params['num_heads'],
-                'test_f1': best_trial.value
-            }
-            print(f"{model_name}:")
-            print(f"  Hidden channels: {best_params_per_model[model_name]['hidden_channels']}")
-            print(f"  Dropout: {best_params_per_model[model_name]['dropout']:.4f}")
-            print(f"  Learning rate: {best_params_per_model[model_name]['lr']:.6f}")
-            print(f"  Num heads: {best_params_per_model[model_name]['num_heads']}")
-            print(f"  Best F1: {best_params_per_model[model_name]['test_f1']:.4f}")
-        else:
-            # Use default params if no successful trials
-            best_params_per_model[model_name] = {
-                'hidden_channels': 128,
-                'dropout': 0.3,
-                'lr': 0.001,
-                'num_heads': 4,
-                'test_f1': 0.0
-            }
-            print(f"{model_name}: Using default parameters (no successful trials)")
-    
-    print("=" * 60)
-    
-    # Overall best
-    best_trial = study.best_trial
-    print(f"\nOverall best F1: {study.best_value:.4f} ({best_trial.params.get('model_name', 'N/A')})")
+    print(f"Best hyperparameters found:")
+    print(f"  Hidden channels: {best_hidden_channels}")
+    print(f"  Dropout: {best_dropout:.4f}")
+    print(f"  Learning rate: {best_lr:.6f}")
+    print(f"  Num heads: {best_num_heads}")
 
     # ========================================================================
     # 5. Define models to train (7 base + 4 MixHop = 11 models)
@@ -1390,55 +1261,42 @@ def run_full_pipeline():
     test_y_true = data.y[data.test_mask].cpu().numpy()
     
     # ========================================================================
-    # 6. Train all GNN models with optimized hyperparameters
+    # 6. Train all GNN models
     # ========================================================================
-    print("\n6. Training GNN models with optimized hyperparameters...")
+    print("\n6. Training GNN models...")
     
     for model_name in all_models_to_train:
         print(f"\n--- Training {model_name} ---")
         
         try:
-            # Get optimized hyperparameters for this model
-            model_params = best_params_per_model.get(model_name, {
-                'hidden_channels': 128,
-                'dropout': 0.3,
-                'lr': 0.001,
-                'num_heads': 4
-            })
-            
-            hidden_channels = model_params['hidden_channels']
-            dropout = model_params['dropout']
-            lr = model_params['lr']
-            num_heads = model_params['num_heads']
-            
             model_class = MODEL_CLASSES[model_name]
             
             # Create model
             if model_name == 'GAT':
                 model = model_class(
                     in_channels=data.x.size(1),
-                    hidden_channels=hidden_channels,
+                    hidden_channels=best_hidden_channels,
                     out_channels=2,
-                    num_heads=num_heads,
-                    dropout=dropout
+                    num_heads=best_num_heads,
+                    dropout=best_dropout
                 )
             elif 'MixHop' in model_name:
                 model = model_class(
                     in_channels=data.x.size(1),
-                    hidden_channels=hidden_channels,
+                    hidden_channels=best_hidden_channels,
                     out_channels=2,
-                    dropout=dropout
+                    dropout=best_dropout
                 )
             else:
                 model = model_class(
                     in_channels=data.x.size(1),
-                    hidden_channels=hidden_channels,
+                    hidden_channels=best_hidden_channels,
                     out_channels=2,
-                    dropout=dropout
+                    dropout=best_dropout
                 )
             
             model = model.to(device)
-            optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+            optimizer = torch.optim.Adam(model.parameters(), lr=best_lr)
             criterion = FocalLoss(alpha=1, gamma=2)
             
             trainer = Trainer(model, data, device, optimizer, criterion)
@@ -1533,14 +1391,12 @@ def run_full_pipeline():
     # Sort by F1 score
     sorted_results = sorted(results_collector.items(), key=lambda x: x[1].get('f1', 0), reverse=True)
     
-    print(f"\n{'Model':<25} {'F1':>8} {'AUC':>8} {'G-Mean':>8} {'Accuracy':>8} {'Precision':>8} {'Recall':>8} {'Specif':>8} {'MacroF1':>8} {'MacroRec':>8}")
-    print("-" * 110)
+    print(f"\n{'Model':<25} {'F1':>8} {'AUC':>8} {'G-Mean':>8} {'Accuracy':>8}")
+    print("-" * 60)
     
     for model_name, metrics in sorted_results:
-        print(f"{model_name:<25} {metrics.get('f1', 0):>8.4f} {metrics.get('auc', 0):>8.4f} "
-              f"{metrics.get('gmean', 0):>8.4f} {metrics.get('accuracy', 0):>8.4f} "
-              f"{metrics.get('precision', 0):>8.4f} {metrics.get('recall', 0):>8.4f} "
-              f"{metrics.get('specificity', 0):>8.4f} {metrics.get('macro_f1', 0):>8.4f} {metrics.get('macro_recall', 0):>8.4f}")
+        print(f"{model_name:<25} {metrics['f1']:>8.4f} {metrics['auc']:>8.4f} "
+              f"{metrics['gmean']:>8.4f} {metrics['accuracy']:>8.4f}")
 
     # ========================================================================
     # 9. Generate Visualizations
