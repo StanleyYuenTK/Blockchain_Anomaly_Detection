@@ -29,40 +29,65 @@ class TrainingHistory:
             'epoch': [],
             'train_loss': [],
             'val_loss': [],
-            'val_f1': [],
-            'val_acc': [],
-            'test_f1': [],
-            'test_acc': [],
-            'val_macro_recall': [],
-            'test_macro_recall': [],
-            'val_gmean': [],
-            'test_gmean': [],
+            
             'val_macro_f1': [],
-            'test_macro_f1': [],
+            'val_macro_precision': [],
+            'val_macro_recall': [],
             'val_macro_auc': [],
-            'test_macro_auc': []
+            'val_gmean': [],
+            'val_specificity': [],
+            'val_f1': [],
+            'val_precision': [],
+            'val_recall': [],
+            'val_auc': [],
+            'val_acc': [],
+            
+            'test_macro_f1': [],
+            'test_macro_precision': [],
+            'test_macro_recall': [],
+            'test_macro_auc': [],
+            'test_gmean': [],
+            'test_specificity': [],
+            'test_f1': [],
+            'test_precision': [],
+            'test_recall': [],
+            'test_auc': [],
+            'test_acc': []
         }
 
-    def add_epoch(self, epoch, train_loss, val_loss, val_f1, val_acc, test_f1, test_acc,
-                  val_macro_recall=0.0, test_macro_recall=0.0, val_gmean=0.0, test_gmean=0.0,
-                  val_macro_f1=0.0, test_macro_f1=0.0, val_macro_auc=0.0, test_macro_auc=0.0):
+    def add_epoch(self, epoch, train_loss, val_loss, 
+                    val_macro_f1=0.0, val_macro_precision=0.0, val_macro_recall=0.0, val_macro_auc=0.0, val_gmean=0.0, val_specificity=0.0,
+                    val_f1=0.0, val_precision=0.0, val_recall=0.0, val_auc=0.0, val_acc=0.0, 
+                   test_macro_f1=0.0,test_macro_precision=0.0,test_macro_recall=0.0,test_macro_auc=0.0,test_gmean=0.0,test_specificity=0.0,
+                   test_f1=0.0,test_precision=0.0,test_recall=0.0,test_auc=0.0,test_acc=0.0):
         """Add a record for one epoch"""
         self.history['epoch'].append(epoch)
         self.history['train_loss'].append(train_loss)
         self.history['val_loss'].append(val_loss)
-        self.history['val_f1'].append(val_f1)
-        self.history['val_acc'].append(val_acc)
-        self.history['test_f1'].append(test_f1)
-        self.history['test_acc'].append(test_acc)
-        # Additional metrics
-        self.history['val_macro_recall'].append(val_macro_recall)
-        self.history['test_macro_recall'].append(test_macro_recall)
-        self.history['val_gmean'].append(val_gmean)
-        self.history['test_gmean'].append(test_gmean)
+        
         self.history['val_macro_f1'].append(val_macro_f1)
-        self.history['test_macro_f1'].append(test_macro_f1)
+        self.history['val_macro_precision'].append(val_macro_precision)
+        self.history['val_macro_recall'].append(val_macro_recall)
         self.history['val_macro_auc'].append(val_macro_auc)
+        self.history['val_gmean'].append(val_gmean)
+        self.history['val_specificity'].append(val_specificity)
+        self.history['val_f1'].append(val_f1)
+        self.history['val_precision'].append(val_precision)
+        self.history['val_recall'].append(val_recall)
+        self.history['val_auc'].append(val_auc)
+        self.history['val_acc'].append(val_acc)
+     
+        self.history['test_macro_f1'].append(test_macro_f1)
+        self.history['test_macro_precision'].append(test_macro_precision)
+        self.history['test_macro_recall'].append(test_macro_recall)
         self.history['test_macro_auc'].append(test_macro_auc)
+        self.history['test_gmean'].append(test_gmean)
+        self.history['test_specificity'].append(test_specificity)
+        self.history['test_f1'].append(test_f1)
+        self.history['test_precision'].append(test_precision)
+        self.history['test_recall'].append(test_recall)
+        self.history['test_auc'].append(test_auc)
+        self.history['test_acc'].append(test_acc)
 
     def save(self, filepath):
         """Save training history to file"""
@@ -127,38 +152,51 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
     # Create save directory if it doesn't exist
     os.makedirs(save_dir, exist_ok=True)
 
-    # Define the models to compare - check if this is for MixHopConv models
-    if 'MixHop_Final_Ensemble' in results_collector:
-        # This is for MixHopConv models
-        models = ['MixHop_Final_Ensemble', 'MixHop_GCN_Single', 'MixHop_GAT_Single', 'MixHop_GIN_Single', 'MixHop_GraphSAGE_Single', 'IForest']
-        model_labels = ['MixHop Final Ensemble', 'MixHop GCN Single', 'MixHop GAT Single', 'MixHop GIN Single', 'MixHop GraphSAGE Single', 'Isolation Forest']
-    else:
-        # This is for regular GNN models
-        models = ['Final_Ensemble', 'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single', 'IForest']
-        model_labels = ['Final Ensemble', 'GCN Single', 'GAT Single', 'GIN Single', 'GraphSAGE Single', 'Isolation Forest']
-
-    # Filter out models that don't exist in results_collector
-    available_models = []
-    available_labels = []
-    for model, label in zip(models, model_labels):
+    # Dynamically get all models from results_collector
+    # Priority order for ensemble models
+    ensemble_priority = ['Ensemble_GA', 'Ensemble_Average', 'Ensemble_CatBoost', 'MixHop_Final_Ensemble', 'Final_Ensemble']
+    
+    # Base model names to look for
+    base_models = ['GCN', 'GAT', 'GIN', 'GraphSAGE', 'APPNP', 'ChebNet', 'GCNII', 
+                   'MixHop_GCN', 'MixHop_GAT', 'MixHop_GIN', 'MixHop_GraphSAGE']
+    
+    # Build model list with priority for ensemble models first
+    models = []
+    model_labels = []
+    
+    # Add ensemble models first (in priority order)
+    for ens_model in ensemble_priority:
+        if ens_model in results_collector:
+            models.append(ens_model)
+            model_labels.append(ens_model.replace('_', ' '))
+    
+    # Add base models
+    for model in base_models:
         if model in results_collector:
-            available_models.append(model)
-            available_labels.append(label)
+            models.append(model)
+            model_labels.append(model.replace('_', ' '))
+    
+    # Add IForest if present
+    if 'IForest' in results_collector:
+        models.append('IForest')
+        model_labels.append('Isolation Forest')
 
-    models = available_models
-    model_labels = available_labels
+    # If no models found, return early
+    if not models:
+        print("Warning: No models found in results_collector for visualization")
+        return
 
     # Define metrics to plot (all 9 metrics from calculate_all_metrics)
     metrics = ['accuracy', 'precision', 'recall', 'f1', 'macro_recall', 'macro_f1', 'auc', 'macro_auc', 'gmean']
     metric_labels = ['Accuracy', 'Precision', 'Recall', 'F1-score', 'Macro Recall', 'Macro F1', 'ROC-AUC', 'Macro AUC', 'G-Mean']
 
-    # Color palette for 6 models
-    colors = ['#2E86AB', '#A23B72', '#27AE60', '#E67E22', '#9B59B6', '#F24236']
-    # Blue, Purple, Green, Orange, Magenta, Red, Yellow, Teal, Dark Blue, Bright Red
+    # Color palette - extend if needed
+    base_colors = ['#2E86AB', '#A23B72', '#27AE60', '#E67E22', '#9B59B6', '#F24236', '#1ABC9C', '#E74C3C', '#3498DB']
+    colors = base_colors[:len(models)] if len(models) <= len(base_colors) else base_colors * (len(models) // len(base_colors) + 1)
 
     # Create individual plots for each metric
     for metric, metric_label in zip(metrics, metric_labels):
-        fig, ax = plt.subplots(figsize=(16, 8))
+        fig, ax = plt.subplots(figsize=(max(10, len(models) * 2), 8))
 
         # Collect values for this metric
         values = []
@@ -167,8 +205,8 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
             values.append(value)
 
         # Create bars
-        bars = ax.bar(model_labels, values, color=colors, alpha=0.8,
-                     edgecolor='black', linewidth=1.5, width=0.25)
+        bars = ax.bar(model_labels, values, color=colors[:len(models)], alpha=0.8,
+                     edgecolor='black', linewidth=1.5, width=0.6)
 
         # Add value labels on top of bars
         for bar, value in zip(bars, values):
@@ -176,7 +214,7 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
             if not np.isnan(height):
                 ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
                        f'{height:.4f}', ha='center', va='bottom',
-                       fontsize=12, fontweight='bold')
+                       fontsize=10, fontweight='bold')
 
         # Customize the plot
         ax.set_ylabel(metric_label, fontsize=14, fontweight='bold')
@@ -189,12 +227,12 @@ def plot_individual_metrics(results_collector, save_dir='results/metrics'):
             ax.set_ylim(0, 1.0)
 
         # Rotate x-axis labels for better readability
-        plt.xticks(rotation=45, ha='right', fontsize=18)
+        plt.xticks(rotation=45, ha='right', fontsize=10)
 
         # Add grid
         ax.grid(True, alpha=0.3, axis='y')
 
-        # Adjust layout
+        # Adjust layout using tight_layout
         plt.tight_layout()
 
         # Save the plot
@@ -344,15 +382,25 @@ def generate_standard_gnn_visualizations(results_collector, training_histories, 
     # Plot training curves for all models (showing fitting process)
     print("Generating training curves for all models...")
 
-    # Models to generate training curves for
-    models_to_plot = [
-        'GCN_Single', 'GAT_Single', 'GIN_Single', 'GraphSAGE_Single'
-    ]
+    # Dynamically get all models that have training history
+    # Check for various naming conventions: GCN, GAT, GIN, GraphSAGE, APPNP, ChebNet, GCNII
+    # or with _Single suffix: GCN_Single, etc.
+    base_models = ['GCN', 'GAT', 'GIN', 'GraphSAGE', 'APPNP', 'ChebNet', 'GCNII']
+    models_to_plot = []
+    for model in base_models:
+        if model in training_histories and training_histories[model] is not None:
+            models_to_plot.append(model)
+        elif f"{model}_Single" in training_histories and training_histories[f"{model}_Single"] is not None:
+            models_to_plot.append(f"{model}_Single")
 
     for model_key in models_to_plot:
-        if model_key in training_histories and training_histories[model_key] is not None:
-            history = training_histories[model_key]
-            model_name = model_key.replace('_', ' ')
+        try:
+            history = training_histories.get(model_key)
+            if history is None:
+                continue
+            
+            # Clean model name for display
+            model_name = model_key.replace('_Single', '').replace('_', ' ')
 
             epochs = history.history['epoch']
             train_losses = history.history['train_loss']
@@ -381,20 +429,28 @@ def generate_standard_gnn_visualizations(results_collector, training_histories, 
             ax2.legend()
             ax2.grid(True, alpha=0.3)
 
+            # Use tight_layout instead of constrained_layout to avoid warning
             plt.tight_layout()
             filename = f'{model_key.lower()}_training_curves.png'
             plt.savefig(f'results/curves/{filename}', dpi=300, bbox_inches='tight')
             plt.close()
 
             print(f"Training curves saved to: results/curves/{filename}")
-        else:
-            print(f"Warning: No training history available for {model_key}")
+        except Exception as e:
+            print(f"Warning: Could not generate training curves for {model_key}: {e}")
+            plt.close('all')
 
     # Create a summary plot for the final ensemble (no training history, just final performance)
     print("Generating ensemble performance summary...")
 
-    # Get final metrics for ensemble
-    ensemble_metrics = results_collector.get('Final_Ensemble', {})
+    # Get final metrics for ensemble - check multiple possible keys
+    ensemble_keys = ['Ensemble_GA', 'Ensemble_Average', 'Ensemble_CatBoost', 'Final_Ensemble']
+    ensemble_metrics = None
+    for key in ensemble_keys:
+        if key in results_collector:
+            ensemble_metrics = results_collector[key]
+            break
+    
     if ensemble_metrics:
         metrics_names = ['f1', 'accuracy', 'precision', 'recall', 'macro_recall', 'macro_f1', 'auc', 'macro_auc', 'gmean']
         metrics_values = [ensemble_metrics.get(m, 0) for m in metrics_names]
