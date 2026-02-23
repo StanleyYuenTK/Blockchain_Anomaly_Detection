@@ -33,8 +33,22 @@ import pygad
 
 # visualiz
 from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations
+from GNNs import APPNPModel
 
 RANDOM_SEED = 24027277
+# {
+#     'accuracy': 0,
+#     'f1': 0,
+#     'precision': 0,
+#     'recall': 0,
+#     'auc': 0,
+#     'gmean': 0,
+#     'macro_f1': 0,
+#     'macro_precision': 0,
+#     'macro_recall': 0,
+#     'macro_auc': 0,
+# }
+
 
 
 # ==============================================================================
@@ -287,20 +301,21 @@ def gnn_test(model, data):
 
 def gnn_train_and_test(model_name, data, 
         in_channels=None, hidden_channels=64, out_channels=2, 
-        num_layers=2, dropout=0.5, epochs=100, lr=0.01
+        num_layers=2, dropout=0.5, epochs=100, lr=0.01, heads=8
     ):
 
     in_channels = data.x.size(1)
     # Initialize GCN model
     if model_name == 'GCN':
-        model = GCN(
-            in_channels=in_channels,
-            hidden_channels=hidden_channels,
-            out_channels=out_channels,
-            num_layers=num_layers,
-            dropout=dropout,
-            norm='batch_norm'
-        ).to(data.x.device)
+        model = GCN(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm').to(data.x.device)
+    elif model_name == 'GAT':
+        model = GAT(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm', heads=heads).to(data.x.device)
+    elif model_name == 'GraphSAGE':
+        model = GraphSAGE(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm', aggr='mean').to(data.x.device)    
+    elif model_name == 'GIN':
+        model = GIN(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm').to(data.x.device)
+    elif model_name == 'APPNP':
+        model = APPNPModel(in_channels, hidden_channels, out_channels).to(data.x.device)
         
     model = gnn_train(model, data)
     results = gnn_test(model, data)
@@ -344,15 +359,16 @@ def main():
     print("Degree features...")
     degree_features = get_degree_features(elliptic_data.edge_index.cpu(), elliptic_data.x.size(0)).to(device)
     
-    print("Louvain features...")
-    louvain_features, partition = get_louvain_features(elliptic_data.edge_index.cpu(), elliptic_data.x.size(0), labels=elliptic_data.y, train_mask=elliptic_data.train_mask)
-    louvain_features = louvain_features.to(device)
+    # print("Louvain features...")
+    # louvain_features, partition = get_louvain_features(elliptic_data.edge_index.cpu(), elliptic_data.x.size(0), labels=elliptic_data.y, train_mask=elliptic_data.train_mask)
+    # louvain_features = louvain_features.to(device)
 
-    elliptic_data.x = torch.cat([elliptic_data.x, pagerank_features, degree_features, louvain_features], dim=1)
+    # elliptic_data.x = torch.cat([elliptic_data.x, pagerank_features, degree_features, louvain_features], dim=1)
+    elliptic_data.x = torch.cat([elliptic_data.x, pagerank_features, degree_features], dim=1)
     print(f"Features Engineering done...\nTotal features: {elliptic_data.x.size(1)} dimensions")
     
     # Apply StandardScaler to normalize all features
-    print("StandardScaler...")
+    print("\nStandardScaler...")
     x_numpy = elliptic_data.x.cpu().numpy()  # Convert to numpy
     x_scaled = StandardScaler().fit_transform(x_numpy)  # Fit and transform
     elliptic_data.x = torch.tensor(x_scaled, dtype=torch.float).to(elliptic_data.x.device)  # Convert back to tensor
@@ -380,12 +396,12 @@ def main():
     #     'MixHop_GCN_K4', 'MixHop_GAT_K4', 'MixHop_GraphSAGE_K4', 'MixHop_GIN_K4',
     # ]
 
-    gnn_models_list = ['GCN']
+    gnn_models_list = ['APPNP', 'GCN', 'GAT', 'GraphSAGE', 'GIN']
 
     for model_name in gnn_models_list:
         print(f"\n--- Training {model_name} ---")
         results = gnn_train_and_test(model_name=model_name, data=elliptic_data)
-        print(f"GCN results: {results}")
+        # print(f"GCN results: {results}")
         print("GNN training completed")
 
 
