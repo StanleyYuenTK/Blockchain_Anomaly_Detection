@@ -33,12 +33,15 @@ import pygad
 
 # visualiz
 from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations
-from GNNs import APPNPModel
+from GNNs import (APPNPModel, PureChebNetModel, LinearChebNetModel, MixHopGCNModel, MixHopGCNModel_1dropout,
+                  MixHopGATModel, MixHopGraphSAGEModel, MixHopGINModel, MixHopGINModel_noBRD )
+import GNNs
 
 RANDOM_SEED = 24027277
+# list
 # {
 #     'accuracy': 0,
-#     'f1': 0,
+#     'f1': ,
 #     'precision': 0,
 #     'recall': 0,
 #     'auc': 0,
@@ -49,6 +52,33 @@ RANDOM_SEED = 24027277
 #     'macro_auc': 0,
 # }
 
+# AI
+# metrics = {
+#     'accuracy': accuracy_score(y_true, y_pred),
+#     'f1': f1_score(y_true, y_pred, zero_division=0),
+#     'precision': precision_score(y_true, y_pred, zero_division=0),
+#     'recall': recall_score(y_true, y_pred, zero_division=0),
+#     'auc': roc_auc_score(y_true, y_prob),
+#     'macro_f1': f1_score(y_true, y_pred, average='macro', zero_division=0),
+#     'macro_precision': precision_score(y_true, y_pred, average='macro', zero_division=0),
+#     'macro_recall': recall_score(y_true, y_pred, average='macro', zero_division=0),
+#     'macro_auc': roc_auc_score(y_true, y_prob, multi_class='ovr', average='macro'),
+# }
+
+# Isolation forest
+# baseline_results = {
+#         'macro_f1': f1_score(y_test, y_pred, average='macro', zero_division=0),
+#         'macro_precision': precision_score(y_test, y_pred, average='macro', zero_division=0),
+#         'macro_recall': recall_score(y_test, y_pred, average='macro', zero_division=0),
+#         'macro_auc': roc_auc_score(y_test, -anomaly_scores),
+#         'gmean': np.sqrt(recall_score(y_test, y_pred, pos_label=1, zero_division=0) * 
+#                         (1 - precision_score(y_test, y_pred, pos_label=0, zero_division=0))),
+#         'f1': f1_score(y_test, y_pred, pos_label=1, zero_division=0),
+#         'precision': precision_score(y_test, y_pred, pos_label=1, zero_division=0),
+#         'recall': recall_score(y_test, y_pred, pos_label=1, zero_division=0),
+#         'auc': roc_auc_score(y_test, -anomaly_scores),
+#         'accuracy': accuracy_score(y_test, y_pred),
+#     }
 
 
 # ==============================================================================
@@ -314,9 +344,17 @@ def gnn_train_and_test(model_name, data,
         model = GraphSAGE(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm', aggr='mean').to(data.x.device)    
     elif model_name == 'GIN':
         model = GIN(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm').to(data.x.device)
-    elif model_name == 'APPNP':
-        model = APPNPModel(in_channels, hidden_channels, out_channels).to(data.x.device)
-        
+    # elif model_name == 'APPNP':
+    #     model = APPNPModel(in_channels, hidden_channels, out_channels).to(data.x.device)
+    # elif model_name == 'PureChebNetModel':
+    #     model = PureChebNetModel(in_channels, hidden_channels, out_channels).to(data.x.device)
+    # elif model_name == 'LinearChebNetModel':
+    #         model = LinearChebNetModel(in_channels, hidden_channels, out_channels).to(data.x.device)
+    else:
+        model_func = getattr(GNNs, model_name, None)
+        model = model_func(in_channels, hidden_channels, out_channels).to(data.x.device)
+
+    
     model = gnn_train(model, data)
     results = gnn_test(model, data)
     
@@ -396,14 +434,21 @@ def main():
     #     'MixHop_GCN_K4', 'MixHop_GAT_K4', 'MixHop_GraphSAGE_K4', 'MixHop_GIN_K4',
     # ]
 
-    gnn_models_list = ['APPNP', 'GCN', 'GAT', 'GraphSAGE', 'GIN']
+    # gnn_models_list_done = ['APPNP', 'GCN', 'GAT', 'GraphSAGE', 'GIN']
+    gnn_models_list = ['APPNP', 'PureChebNetModel', 'LinearChebNetModel', 'MixHopGCNModel', 'MixHopGCNModel_1dropout',
+                       'MixHopGATModel', 'MixHopGraphSAGEModel', 'MixHopGINModel', 'MixHopGINModel_noBRD']
 
+    results = {}
     for model_name in gnn_models_list:
         print(f"\n--- Training {model_name} ---")
-        results = gnn_train_and_test(model_name=model_name, data=elliptic_data)
-        # print(f"GCN results: {results}")
+        current_results = gnn_train_and_test(model_name=model_name, data=elliptic_data)
+        results[model_name] = current_results
         print("GNN training completed")
 
+    for k, v in results.items():
+        print(k)
+        for metric, value in v.items():
+            print(metric, value)
 
 if __name__ == "__main__":
     main()
