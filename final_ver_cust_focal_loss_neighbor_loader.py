@@ -191,11 +191,22 @@ def get_louvain_features(edge_index, num_nodes, labels=None, train_mask=None, re
     return louvain_feat, partition
 
 
+# def get_neighbor_loader(data, batch_size=1024, num_neighbors=[25, 10], shuffle=True):
+#     # https://pytorch-geometric.readthedocs.io/en/latest/tutorial/multi_gpu_vanilla.html
+#     train_indices = torch.where(data.train_mask)[0]
+#     return NeighborLoader(
+#         data,
+#         num_neighbors=num_neighbors,
+#         batch_size=batch_size,
+#         input_nodes=train_indices,
+#         shuffle=shuffle
+#     )
+
+
 # ==============================================================================
 # Genetic Algorithm
 # https://pygad.readthedocs.io/en/latest/
 # ==============================================================================
-
 
 # ==============================================================================
 # Models - GNN Models, Isolation Forest Baseline
@@ -260,11 +271,22 @@ def get_gnn(model_name, data, in_channels, hidden_channels, num_layers, out_chan
     return model
 
 
+# def train_gnn(model, data, epochs=100, lr=0.01):
+#     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
+#     model.train()
+#     for epoch in range(epochs):
+#         optimizer.zero_grad()
+#         out = model(data.x, data.edge_index)
+#         loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask])
+#         loss.backward()
+#         optimizer.step()
+#     return model
+
 def train_gnn(model, data, epochs=100, lr=0.01):
     criterion = FocalLoss(alpha=0.25, gamma=2.0, reduction='mean')
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=5e-4)
     model.train()
-    for _ in range(epochs):
+    for epoch in range(epochs):
         optimizer.zero_grad()
         out = model(data.x, data.edge_index)
         loss = criterion(out[data.train_mask], data.y[data.train_mask])
@@ -390,8 +412,8 @@ def main():
     # louvain_features, partition = get_louvain_features(elliptic_data.edge_index.cpu(), elliptic_data.x.size(0), labels=elliptic_data.y, train_mask=elliptic_data.train_mask)
     # louvain_features = louvain_features.to(device)
 
-    print("\nAdding pagerank, degree, louvain features to raw dataset...")
     # elliptic_data.x = torch.cat([elliptic_data.x, pagerank_features, degree_features, louvain_features], dim=1)
+    print("\nAdding pagerank, degree, louvain features to raw dataset...")
     elliptic_data.x = torch.cat([elliptic_data.x, pagerank_features, degree_features], dim=1)
     print(f"Total features: {elliptic_data.x.size(1)} dimensions")
     
@@ -410,7 +432,6 @@ def main():
     print("\n3. Training Isolation Forest baseline...")
     baseline_results = isolation_forest_baseline(elliptic_data)
     
-
     # ========================================================================
     # 4. Train GCN model
     # gnn_models_list = ['GCN', 'GAT', 'GraphSAGE', 'GIN', 'APPNP', 'ChebNet', 'GCNII',
@@ -433,7 +454,6 @@ def main():
         gnns_test_probs.append(gnn_test_probs.reshape(-1, 1))
         eval_gnn(y_val, y_test, gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds)
 
-
     # ========================================================================
     # 5. softmax - Ensemble Model or blending ensemble model
     # Blending, Soft Voting, Bagging, stacking
@@ -441,8 +461,6 @@ def main():
     print("\n5. Blending CatBoost...")
     cat_test_preds, cat_test_probs = blending_catboost(elliptic_data, gnns_val_probs, gnns_test_probs)
     eval_blending_catboost(y_test, cat_test_preds, cat_test_probs)
-
-    
 
 if __name__ == "__main__":
     main()

@@ -59,155 +59,155 @@ RANDOM_SEED = 24027277
 # Data Processing - Feature Engineering
 # ==============================================================================
 
-class TensorScaler:
-    """GPU-compatible standard scaler using PyTorch"""
-    def __init__(self):
-        self.mean = None
-        self.std = None
+# class TensorScaler:
+#     """GPU-compatible standard scaler using PyTorch"""
+#     def __init__(self):
+#         self.mean = None
+#         self.std = None
 
-    def fit(self, x):
-        self.mean = x.mean(dim=0, keepdim=True)
-        self.std = x.std(dim=0, keepdim=True)
-        self.std[self.std == 0] = 1.0
-        return self
+#     def fit(self, x):
+#         self.mean = x.mean(dim=0, keepdim=True)
+#         self.std = x.std(dim=0, keepdim=True)
+#         self.std[self.std == 0] = 1.0
+#         return self
 
-    def transform(self, x):
-        return (x - self.mean) / self.std
+#     def transform(self, x):
+#         return (x - self.mean) / self.std
 
-    def fit_transform(self, x):
-        self.fit(x)
-        return self.transform(x)
+#     def fit_transform(self, x):
+#         self.fit(x)
+#         return self.transform(x)
 
-class GraphFeatureEngineer:
-    """Graph feature engineering with Degree, PageRank, and Louvain community detection"""
+# class GraphFeatureEngineer:
+#     """Graph feature engineering with Degree, PageRank, and Louvain community detection"""
 
-    def __init__(self, data):
-        self.data = data
-        self.edge_index = data.edge_index.cpu()
-        self.num_nodes = data.x.size(0)
+#     def __init__(self, data):
+#         self.data = data
+#         self.edge_index = data.edge_index.cpu()
+#         self.num_nodes = data.x.size(0)
 
-    def compute_degree_features(self):
-        """Compute directed degree features"""
-        # 1. Calculate in/out degree
-        out_deg = pyg_degree(self.edge_index[0], self.num_nodes)
-        in_deg = pyg_degree(self.edge_index[1], self.num_nodes)
+#     def compute_degree_features(self):
+#         """Compute directed degree features"""
+#         # 1. Calculate in/out degree
+#         out_deg = pyg_degree(self.edge_index[0], self.num_nodes)
+#         in_deg = pyg_degree(self.edge_index[1], self.num_nodes)
         
-        # 2. Total degree and ratio
-        total_deg = in_deg + out_deg
-        in_out_ratio = in_deg / (out_deg + 1e-8)
+#         # 2. Total degree and ratio
+#         total_deg = in_deg + out_deg
+#         in_out_ratio = in_deg / (out_deg + 1e-8)
         
-        # 3. Log normalization (handle power law)
-        in_deg_log = torch.log1p(in_deg)
-        out_deg_log = torch.log1p(out_deg)
-        total_deg_log = torch.log1p(total_deg)
+#         # 3. Log normalization (handle power law)
+#         in_deg_log = torch.log1p(in_deg)
+#         out_deg_log = torch.log1p(out_deg)
+#         total_deg_log = torch.log1p(total_deg)
         
-        # 4. Ranking feature
-        total_deg_rank = torch.argsort(torch.argsort(total_deg, descending=True)).float() / self.num_nodes
+#         # 4. Ranking feature
+#         total_deg_rank = torch.argsort(torch.argsort(total_deg, descending=True)).float() / self.num_nodes
 
-        return torch.stack([
-            in_deg, out_deg, in_deg_log, out_deg_log, total_deg_log, in_out_ratio, total_deg_rank
-        ], dim=1)
+#         return torch.stack([
+#             in_deg, out_deg, in_deg_log, out_deg_log, total_deg_log, in_out_ratio, total_deg_rank
+#         ], dim=1)
     
-    def compute_pagerank_features(self, alpha=0.15, max_iter=100, tol=1e-6):
-        """Compute PageRank features"""
-        edge_index = self.edge_index
-        num_nodes = self.num_nodes
+#     def compute_pagerank_features(self, alpha=0.15, max_iter=100, tol=1e-6):
+#         """Compute PageRank features"""
+#         edge_index = self.edge_index
+#         num_nodes = self.num_nodes
         
-        ppr_edge_index, ppr_weights = get_ppr(edge_index=edge_index, alpha=alpha, num_nodes=num_nodes)
-        pagerank_score = torch_scatter.scatter_add(ppr_weights,ppr_edge_index[1],dim=0,dim_size=num_nodes)
-        return pagerank_score.cpu().reshape(-1, 1)
+#         ppr_edge_index, ppr_weights = get_ppr(edge_index=edge_index, alpha=alpha, num_nodes=num_nodes)
+#         pagerank_score = torch_scatter.scatter_add(ppr_weights,ppr_edge_index[1],dim=0,dim_size=num_nodes)
+#         return pagerank_score.cpu().reshape(-1, 1)
     
-    def compute_louvain_features(self, resolution=1.0, train_mask=None):
-        """Compute Louvain community features"""
-        # Build graph
-        G = nx.Graph()
-        edges = self.edge_index.t().cpu().numpy()
-        G.add_edges_from(edges)
+#     def compute_louvain_features(self, resolution=1.0, train_mask=None):
+#         """Compute Louvain community features"""
+#         # Build graph
+#         G = nx.Graph()
+#         edges = self.edge_index.t().cpu().numpy()
+#         G.add_edges_from(edges)
         
-        # Run Louvain
-        partition = community_louvain.best_partition(G, resolution=resolution, random_state=RANDOM_SEED)
+#         # Run Louvain
+#         partition = community_louvain.best_partition(G, resolution=resolution, random_state=RANDOM_SEED)
         
-        comm_ids = np.array([partition.get(i, -1) for i in range(self.num_nodes)])
+#         comm_ids = np.array([partition.get(i, -1) for i in range(self.num_nodes)])
         
-        comm_size = {}
-        comm_train_illicit = {}
-        comm_train_total = {}
+#         comm_size = {}
+#         comm_train_illicit = {}
+#         comm_train_total = {}
 
-        labels = self.data.y.cpu().numpy()
-        train_mask_np = train_mask.cpu().numpy() if train_mask is not None else np.ones(self.num_nodes, dtype=bool)
+#         labels = self.data.y.cpu().numpy()
+#         train_mask_np = train_mask.cpu().numpy() if train_mask is not None else np.ones(self.num_nodes, dtype=bool)
 
-        # Calculate community stats (only on train set to prevent leakage)
-        for i in range(self.num_nodes):
-            cid = comm_ids[i]
-            if cid == -1: continue
+#         # Calculate community stats (only on train set to prevent leakage)
+#         for i in range(self.num_nodes):
+#             cid = comm_ids[i]
+#             if cid == -1: continue
             
-            comm_size[cid] = comm_size.get(cid, 0) + 1
+#             comm_size[cid] = comm_size.get(cid, 0) + 1
             
-            if train_mask_np[i]:
-                if labels[i] == 1:
-                    comm_train_illicit[cid] = comm_train_illicit.get(cid, 0) + 1
-                comm_train_total[cid] = comm_train_total.get(cid, 0) + 1
+#             if train_mask_np[i]:
+#                 if labels[i] == 1:
+#                     comm_train_illicit[cid] = comm_train_illicit.get(cid, 0) + 1
+#                 comm_train_total[cid] = comm_train_total.get(cid, 0) + 1
 
-        # Calculate internal degree
-        row, col = self.edge_index
-        same_comm_mask = (torch.from_numpy(comm_ids[row]) == torch.from_numpy(comm_ids[col]))
-        internal_edge_index = self.edge_index[:, same_comm_mask]
-        internal_deg = pyg_degree(internal_edge_index[0], self.num_nodes)
-        total_deg = pyg_degree(self.edge_index[0], self.num_nodes)
+#         # Calculate internal degree
+#         row, col = self.edge_index
+#         same_comm_mask = (torch.from_numpy(comm_ids[row]) == torch.from_numpy(comm_ids[col]))
+#         internal_edge_index = self.edge_index[:, same_comm_mask]
+#         internal_deg = pyg_degree(internal_edge_index[0], self.num_nodes)
+#         total_deg = pyg_degree(self.edge_index[0], self.num_nodes)
 
-        # Combine features
-        louvain_feat = torch.zeros((self.num_nodes, 5))
+#         # Combine features
+#         louvain_feat = torch.zeros((self.num_nodes, 5))
         
-        for i in range(self.num_nodes):
-            cid = comm_ids[i]
-            if cid == -1: continue
+#         for i in range(self.num_nodes):
+#             cid = comm_ids[i]
+#             if cid == -1: continue
             
-            size = comm_size.get(cid, 1)
-            illicit_cnt = comm_train_illicit.get(cid, 0)
-            train_total = comm_train_total.get(cid, 1e-8)
+#             size = comm_size.get(cid, 1)
+#             illicit_cnt = comm_train_illicit.get(cid, 0)
+#             train_total = comm_train_total.get(cid, 1e-8)
             
-            louvain_feat[i, 0] = np.log1p(size)
-            louvain_feat[i, 1] = illicit_cnt / train_total
-            louvain_feat[i, 2] = 1.0 if illicit_cnt > 0 else 0.0
-            louvain_feat[i, 3] = internal_deg[i] / (total_deg[i] + 1e-8)
-            louvain_feat[i, 4] = internal_deg[i] / (size)
+#             louvain_feat[i, 0] = np.log1p(size)
+#             louvain_feat[i, 1] = illicit_cnt / train_total
+#             louvain_feat[i, 2] = 1.0 if illicit_cnt > 0 else 0.0
+#             louvain_feat[i, 3] = internal_deg[i] / (total_deg[i] + 1e-8)
+#             louvain_feat[i, 4] = internal_deg[i] / (size)
 
-        return louvain_feat, partition
+#         return louvain_feat, partition
 
-    def add_degree_pagerank_louvain_features(self, train_mask=None):
-        """Add all graph features to the data object
+#     def add_degree_pagerank_louvain_features(self, train_mask=None):
+#         """Add all graph features to the data object
         
-        Args:
-            train_mask: Optional tensor indicating training nodes. Used for Louvain 
-                        community detection to prevent data leakage.
-        """
+#         Args:
+#             train_mask: Optional tensor indicating training nodes. Used for Louvain 
+#                         community detection to prevent data leakage.
+#         """
         
-        new_x = [self.data.x]
+#         new_x = [self.data.x]
         
-        degree_feats = self.compute_degree_features()
-        new_x.append(degree_feats.to(self.data.x.device))
+#         degree_feats = self.compute_degree_features()
+#         new_x.append(degree_feats.to(self.data.x.device))
         
-        pagerank_feats = self.compute_pagerank_features()
-        new_x.append(pagerank_feats.to(self.data.x.device))
+#         pagerank_feats = self.compute_pagerank_features()
+#         new_x.append(pagerank_feats.to(self.data.x.device))
 
-        # If train_mask is provided, we compute community features
-        # This is useful for the main GNN training (prevent leakage)
-        if train_mask is not None:
-            community_feats, partition = self.compute_louvain_features(train_mask=train_mask)
-            new_x.append(community_feats.to(self.data.x.device))
-            return self.data, partition
+#         # If train_mask is provided, we compute community features
+#         # This is useful for the main GNN training (prevent leakage)
+#         if train_mask is not None:
+#             community_feats, partition = self.compute_louvain_features(train_mask=train_mask)
+#             new_x.append(community_feats.to(self.data.x.device))
+#             return self.data, partition
         
-        enhanced_x = torch.cat(new_x, dim=1)
+#         enhanced_x = torch.cat(new_x, dim=1)
         
-        self.data.x = enhanced_x
+#         self.data.x = enhanced_x
         
-        print(f"Enhanced features: {enhanced_x.size(1)} dimensions")
+#         print(f"Enhanced features: {enhanced_x.size(1)} dimensions")
         
-        return self.data, None
+#         return self.data, None
 
-    def get_graph_structure_features(self):
-        """Get graph structure features (degree + pagerank) for CatBoost meta-model"""
-        return torch.cat([self.compute_degree_features(), self.compute_pagerank_features()], dim=1)
+#     def get_graph_structure_features(self):
+#         """Get graph structure features (degree + pagerank) for CatBoost meta-model"""
+#         return torch.cat([self.compute_degree_features(), self.compute_pagerank_features()], dim=1)
 
 
 def pseudo_labeling(data, model_predictions, threshold=0.5, confidence_threshold=0.9):
@@ -431,77 +431,77 @@ class FocalLoss(nn.Module):
 # ==============================================================================
 # Baseline Model - Isolation Forest (Commented out - using sklearn directly below)
 # ==============================================================================
-def isolation_forest_baseline(data):
+# def isolation_forest_baseline(data):
     
-    X_train = data.x[data.train_mask].cpu().numpy()
-    X_test = data.x[data.test_mask].cpu().numpy()
-    y_test = data.y[data.test_mask].cpu().numpy()
+#     X_train = data.x[data.train_mask].cpu().numpy()
+#     X_test = data.x[data.test_mask].cpu().numpy()
+#     y_test = data.y[data.test_mask].cpu().numpy()
 
-    # Train Isolation Forest
-    clf = IsolationForest(random_state=24027277)
-    clf.fit(X_train)
+#     # Train Isolation Forest
+#     clf = IsolationForest(random_state=24027277)
+#     clf.fit(X_train)
 
-    # Predict: 1=normal, -1=anomaly
-    y_pred = clf.predict(X_test)
-    anomaly_scores = clf.decision_function(X_test)
+#     # Predict: 1=normal, -1=anomaly
+#     y_pred = clf.predict(X_test)
+#     anomaly_scores = clf.decision_function(X_test)
 
-    # Convert: 1=normal, -1=anomaly -> 1=anomaly, 0=normal
-    y_pred = (y_pred == -1).astype(int)
+#     # Convert: 1=normal, -1=anomaly -> 1=anomaly, 0=normal
+#     y_pred = (y_pred == -1).astype(int)
 
-    # Evaluate
-    baseline_results = {
-        'macro_f1': f1_score(y_test, y_pred, average='macro', zero_division=0),
-        'macro_precision': precision_score(y_test, y_pred, average='macro', zero_division=0),
-        'macro_recall': recall_score(y_test, y_pred, average='macro', zero_division=0),
-        'macro_auc': roc_auc_score(y_test, -anomaly_scores),
-        'gmean': np.sqrt(recall_score(y_test, y_pred, pos_label=1, zero_division=0) * 
-                        (1 - precision_score(y_test, y_pred, pos_label=0, zero_division=0))),
-        'f1': f1_score(y_test, y_pred, pos_label=1, zero_division=0),
-        'precision': precision_score(y_test, y_pred, pos_label=1, zero_division=0),
-        'recall': recall_score(y_test, y_pred, pos_label=1, zero_division=0),
-        'auc': roc_auc_score(y_test, -anomaly_scores),
-        'accuracy': accuracy_score(y_test, y_pred),
-    }
-    return baseline_results
+#     # Evaluate
+#     baseline_results = {
+#         'macro_f1': f1_score(y_test, y_pred, average='macro', zero_division=0),
+#         'macro_precision': precision_score(y_test, y_pred, average='macro', zero_division=0),
+#         'macro_recall': recall_score(y_test, y_pred, average='macro', zero_division=0),
+#         'macro_auc': roc_auc_score(y_test, -anomaly_scores),
+#         'gmean': np.sqrt(recall_score(y_test, y_pred, pos_label=1, zero_division=0) * 
+#                         (1 - precision_score(y_test, y_pred, pos_label=0, zero_division=0))),
+#         'f1': f1_score(y_test, y_pred, pos_label=1, zero_division=0),
+#         'precision': precision_score(y_test, y_pred, pos_label=1, zero_division=0),
+#         'recall': recall_score(y_test, y_pred, pos_label=1, zero_division=0),
+#         'auc': roc_auc_score(y_test, -anomaly_scores),
+#         'accuracy': accuracy_score(y_test, y_pred),
+#     }
+#     return baseline_results
 
 
 # ==============================================================================
 # GNN Models - Using PyG Built-in Models
 # ==============================================================================
 
-def GNN_baseline(data, in_channels, hidden_channels, out_channels, num_layers=2, dropout=0.5):
-    gcn = GCN(
-        in_channels=in_channels,
-        hidden_channels=hidden_channels,
-        out_channels=out_channels,
-        num_layers=num_layers,
-        dropout=dropout
-    )
+# def GNN_baseline(data, in_channels, hidden_channels, out_channels, num_layers=2, dropout=0.5):
+#     gcn = GCN(
+#         in_channels=in_channels,
+#         hidden_channels=hidden_channels,
+#         out_channels=out_channels,
+#         num_layers=num_layers,
+#         dropout=dropout
+#     )
 
-    gat = GAT(
-        in_channels=in_channels,
-        hidden_channels=hidden_channels,
-        out_channels=out_channels,
-        num_layers=num_layers,
-        # heads=num_heads,
-        dropout=dropout
-    )
+#     gat = GAT(
+#         in_channels=in_channels,
+#         hidden_channels=hidden_channels,
+#         out_channels=out_channels,
+#         num_layers=num_layers,
+#         # heads=num_heads,
+#         dropout=dropout
+#     )
 
-    graphSAGE = GraphSAGE(
-        in_channels=in_channels,
-        hidden_channels=hidden_channels,
-        out_channels=out_channels,
-        num_layers=num_layers,
-        dropout=dropout
-    )
+#     graphSAGE = GraphSAGE(
+#         in_channels=in_channels,
+#         hidden_channels=hidden_channels,
+#         out_channels=out_channels,
+#         num_layers=num_layers,
+#         dropout=dropout
+#     )
 
-    gin = GIN(
-        in_channels=in_channels,
-        hidden_channels=hidden_channels,
-        out_channels=out_channels,
-        num_layers=num_layers,
-        dropout=dropout
-    )
+#     gin = GIN(
+#         in_channels=in_channels,
+#         hidden_channels=hidden_channels,
+#         out_channels=out_channels,
+#         num_layers=num_layers,
+#         dropout=dropout
+#     )
 
     
 
@@ -582,64 +582,64 @@ def GNN_baseline(data, in_channels, hidden_channels, out_channels, num_layers=2,
 
 
 # APPNP, ChebNet, GCNII remain as custom implementations (or can be simplified later)
-class APPNPModel(torch.nn.Module):
-    """APPNP (Approximate Personalized Propagation of Neural Predictions) with BatchNorm"""
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, alpha=0.1, num_iterations=3):
-        super(APPNPModel, self).__init__()
-        self.mlp1 = nn.Linear(in_channels, hidden_channels)
-        self.bn1 = nn.BatchNorm1d(hidden_channels)
-        self.mlp2 = nn.Linear(hidden_channels, hidden_channels)
-        self.bn2 = nn.BatchNorm1d(hidden_channels)
-        self.mlp3 = nn.Linear(hidden_channels, out_channels)
-        self.dropout = dropout
-        self.alpha = alpha
-        self.num_iterations = num_iterations
-        self.propagate = APPNP(K=num_iterations, alpha=alpha, dropout=dropout)
+# class APPNPModel(torch.nn.Module):
+#     """APPNP (Approximate Personalized Propagation of Neural Predictions) with BatchNorm"""
+#     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, alpha=0.1, num_iterations=3):
+#         super(APPNPModel, self).__init__()
+#         self.mlp1 = nn.Linear(in_channels, hidden_channels)
+#         self.bn1 = nn.BatchNorm1d(hidden_channels)
+#         self.mlp2 = nn.Linear(hidden_channels, hidden_channels)
+#         self.bn2 = nn.BatchNorm1d(hidden_channels)
+#         self.mlp3 = nn.Linear(hidden_channels, out_channels)
+#         self.dropout = dropout
+#         self.alpha = alpha
+#         self.num_iterations = num_iterations
+#         self.propagate = APPNP(K=num_iterations, alpha=alpha, dropout=dropout)
 
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
+#     def forward(self, data, return_embed=False):
+#         x, edge_index = data.x, data.edge_index
         
-        x = self.mlp1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
+#         x = self.mlp1(x)
+#         x = self.bn1(x)
+#         x = F.relu(x)
+#         x = F.dropout(x, p=self.dropout, training=self.training)
         
-        x = self.mlp2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
+#         x = self.mlp2(x)
+#         x = self.bn2(x)
+#         x = F.relu(x)
+#         x = F.dropout(x, p=self.dropout, training=self.training)
         
-        x = self.mlp3(x)
+#         x = self.mlp3(x)
         
-        x = self.propagate(x, edge_index)
-        return F.log_softmax(x, dim=1)
+#         x = self.propagate(x, edge_index)
+#         return F.log_softmax(x, dim=1)
 
 
-class ChebNetModel(torch.nn.Module):
-    """Chebyshev Graph Convolutional Network with BatchNorm"""
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, K=3):
-        super(ChebNetModel, self).__init__()
-        self.convs = nn.ModuleList()
-        self.bns = nn.ModuleList()
+# class ChebNetModel(torch.nn.Module):
+#     """Chebyshev Graph Convolutional Network with BatchNorm"""
+#     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, K=3):
+#         super(ChebNetModel, self).__init__()
+#         self.convs = nn.ModuleList()
+#         self.bns = nn.ModuleList()
         
-        self.convs.append(ChebConv(in_channels, hidden_channels, K=K))
-        self.bns.append(nn.BatchNorm1d(hidden_channels))
+#         self.convs.append(ChebConv(in_channels, hidden_channels, K=K))
+#         self.bns.append(nn.BatchNorm1d(hidden_channels))
         
-        self.convs.append(ChebConv(hidden_channels, out_channels, K=K))
-        self.bns.append(nn.BatchNorm1d(out_channels))
+#         self.convs.append(ChebConv(hidden_channels, out_channels, K=K))
+#         self.bns.append(nn.BatchNorm1d(out_channels))
         
-        self.dropout = dropout
+#         self.dropout = dropout
 
-    def forward(self, data, return_embed=False):
-        x, edge_index = data.x, data.edge_index
-        for i, conv in enumerate(self.convs[:-1]):
-            x = conv(x, edge_index)
-            x = self.bns[i](x)
-            x = F.relu(x)
-            x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.convs[-1](x, edge_index)
-        x = self.bns[-1](x)
-        return F.log_softmax(x, dim=1)
+#     def forward(self, data, return_embed=False):
+#         x, edge_index = data.x, data.edge_index
+#         for i, conv in enumerate(self.convs[:-1]):
+#             x = conv(x, edge_index)
+#             x = self.bns[i](x)
+#             x = F.relu(x)
+#             x = F.dropout(x, p=self.dropout, training=self.training)
+#         x = self.convs[-1](x, edge_index)
+#         x = self.bns[-1](x)
+#         return F.log_softmax(x, dim=1)
 
 
 class GCNIIModel(torch.nn.Module):
@@ -694,166 +694,166 @@ class GCNIIModel(torch.nn.Module):
 # MixHop Models - Multi-hop Information Enhancement using MixHopConv
 # ==============================================================================
 
-class MixHopGCNModel(torch.nn.Module):
-    """GCN with MixHopConv for multi-hop information with BatchNorm"""
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2]):
-        super(MixHopGCNModel, self).__init__()
-        self.powers = powers
-        self.num_hops = len(powers)
+# class MixHopGCNModel(torch.nn.Module):
+#     """GCN with MixHopConv for multi-hop information with BatchNorm"""
+#     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2]):
+#         super(MixHopGCNModel, self).__init__()
+#         self.powers = powers
+#         self.num_hops = len(powers)
         
-        self.mixhop_conv = MixHopConv(
-            in_channels=in_channels,
-            out_channels=hidden_channels,
-            powers=powers,
-            add_self_loops=True
-        )
+#         self.mixhop_conv = MixHopConv(
+#             in_channels=in_channels,
+#             out_channels=hidden_channels,
+#             powers=powers,
+#             add_self_loops=True
+#         )
         
-        self.bn1 = nn.BatchNorm1d(hidden_channels * self.num_hops)
+#         self.bn1 = nn.BatchNorm1d(hidden_channels * self.num_hops)
         
-        self.mlp = MLP([
-            hidden_channels * self.num_hops,
-            hidden_channels * self.num_hops // 2,
-            out_channels
-        ], dropout=dropout)
+#         self.mlp = MLP([
+#             hidden_channels * self.num_hops,
+#             hidden_channels * self.num_hops // 2,
+#             out_channels
+#         ], dropout=dropout)
         
-        self.dropout = dropout
+#         self.dropout = dropout
 
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
+#     def forward(self, data):
+#         x, edge_index = data.x, data.edge_index
         
-        x = self.mixhop_conv(x, edge_index)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
+#         x = self.mixhop_conv(x, edge_index)
+#         x = self.bn1(x)
+#         x = F.relu(x)
+#         x = F.dropout(x, p=self.dropout, training=self.training)
         
-        out = self.mlp(x)
-        return F.log_softmax(out, dim=1)
-
-
-class MixHopGATModel(torch.nn.Module):
-    """GAT with MixHop for multi-hop information using MixHopConv with BatchNorm"""
-    def __init__(self, in_channels, hidden_channels, out_channels, num_heads=4, dropout=0.5, powers=[0, 1, 2]):
-        super(MixHopGATModel, self).__init__()
-        self.powers = powers
-        self.num_hops = len(powers)
-        
-        self.mixhop_conv = MixHopConv(
-            in_channels=in_channels,
-            out_channels=hidden_channels,
-            powers=powers,
-            add_self_loops=True
-        )
-        
-        self.bn1 = nn.BatchNorm1d(hidden_channels * self.num_hops)
-        
-        self.attention = GATConv(
-            hidden_channels * self.num_hops, 
-            hidden_channels, 
-            heads=num_heads, 
-            dropout=dropout, 
-            concat=True
-        )
-        
-        self.bn2 = nn.BatchNorm1d(hidden_channels * num_heads)
-        
-        self.out_proj = nn.Linear(hidden_channels * num_heads, out_channels)
-        self.dropout = dropout
-
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
-        
-        x = self.mixhop_conv(x, edge_index)
-        x = self.bn1(x)
-        x = F.relu(x)
-        
-        x = self.attention(x, edge_index)
-        x = self.bn2(x)
-        x = F.relu(x)
-        
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        
-        out = self.out_proj(x)
-        return F.log_softmax(out, dim=1)
+#         out = self.mlp(x)
+#         return F.log_softmax(out, dim=1)
 
 
-class MixHopGraphSAGEModel(torch.nn.Module):
-    """GraphSAGE with MixHop using MixHopConv with BatchNorm"""
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2], aggr='mean'):
-        super(MixHopGraphSAGEModel, self).__init__()
-        self.powers = powers
-        self.num_hops = len(powers)
+# class MixHopGATModel(torch.nn.Module):
+#     """GAT with MixHop for multi-hop information using MixHopConv with BatchNorm"""
+#     def __init__(self, in_channels, hidden_channels, out_channels, num_heads=4, dropout=0.5, powers=[0, 1, 2]):
+#         super(MixHopGATModel, self).__init__()
+#         self.powers = powers
+#         self.num_hops = len(powers)
         
-        self.mixhop_conv = MixHopConv(
-            in_channels=in_channels,
-            out_channels=hidden_channels,
-            powers=powers,
-            add_self_loops=True
-        )
+#         self.mixhop_conv = MixHopConv(
+#             in_channels=in_channels,
+#             out_channels=hidden_channels,
+#             powers=powers,
+#             add_self_loops=True
+#         )
         
-        self.bn1 = nn.BatchNorm1d(hidden_channels * self.num_hops)
+#         self.bn1 = nn.BatchNorm1d(hidden_channels * self.num_hops)
         
-        self.sage_conv = SAGEConv(hidden_channels * self.num_hops, hidden_channels, aggr=aggr)
+#         self.attention = GATConv(
+#             hidden_channels * self.num_hops, 
+#             hidden_channels, 
+#             heads=num_heads, 
+#             dropout=dropout, 
+#             concat=True
+#         )
         
-        self.bn2 = nn.BatchNorm1d(hidden_channels)
+#         self.bn2 = nn.BatchNorm1d(hidden_channels * num_heads)
         
-        self.out_proj = nn.Linear(hidden_channels, out_channels)
-        self.dropout = dropout
+#         self.out_proj = nn.Linear(hidden_channels * num_heads, out_channels)
+#         self.dropout = dropout
 
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
+#     def forward(self, data):
+#         x, edge_index = data.x, data.edge_index
         
-        x = self.mixhop_conv(x, edge_index)
-        x = self.bn1(x)
-        x = F.relu(x)
+#         x = self.mixhop_conv(x, edge_index)
+#         x = self.bn1(x)
+#         x = F.relu(x)
         
-        x = self.sage_conv(x, edge_index)
-        x = self.bn2(x)
-        x = F.relu(x)
+#         x = self.attention(x, edge_index)
+#         x = self.bn2(x)
+#         x = F.relu(x)
         
-        x = F.dropout(x, p=self.dropout, training=self.training)
+#         x = F.dropout(x, p=self.dropout, training=self.training)
         
-        out = self.out_proj(x)
-        return F.log_softmax(out, dim=1)
+#         out = self.out_proj(x)
+#         return F.log_softmax(out, dim=1)
 
 
-class MixHopGINModel(torch.nn.Module):
-    """GIN with MixHop using MixHopConv with BatchNorm"""
-    def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2]):
-        super(MixHopGINModel, self).__init__()
-        self.powers = powers
-        self.num_hops = len(powers)
+# class MixHopGraphSAGEModel(torch.nn.Module):
+#     """GraphSAGE with MixHop using MixHopConv with BatchNorm"""
+#     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2], aggr='mean'):
+#         super(MixHopGraphSAGEModel, self).__init__()
+#         self.powers = powers
+#         self.num_hops = len(powers)
         
-        self.mixhop_conv = MixHopConv(
-            in_channels=in_channels,
-            out_channels=hidden_channels,
-            powers=powers,
-            add_self_loops=True
-        )
+#         self.mixhop_conv = MixHopConv(
+#             in_channels=in_channels,
+#             out_channels=hidden_channels,
+#             powers=powers,
+#             add_self_loops=True
+#         )
         
-        self.bn1 = nn.BatchNorm1d(hidden_channels * self.num_hops)
+#         self.bn1 = nn.BatchNorm1d(hidden_channels * self.num_hops)
         
-        self.gin_conv = GINConv(MLP([hidden_channels * self.num_hops, hidden_channels, hidden_channels], dropout=dropout))
+#         self.sage_conv = SAGEConv(hidden_channels * self.num_hops, hidden_channels, aggr=aggr)
         
-        self.bn2 = nn.BatchNorm1d(hidden_channels)
+#         self.bn2 = nn.BatchNorm1d(hidden_channels)
         
-        self.out_proj = nn.Linear(hidden_channels, out_channels)
-        self.dropout = dropout
+#         self.out_proj = nn.Linear(hidden_channels, out_channels)
+#         self.dropout = dropout
 
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
+#     def forward(self, data):
+#         x, edge_index = data.x, data.edge_index
         
-        x = self.mixhop_conv(x, edge_index)
-        x = self.bn1(x)
-        x = F.relu(x)
+#         x = self.mixhop_conv(x, edge_index)
+#         x = self.bn1(x)
+#         x = F.relu(x)
         
-        x = self.gin_conv(x, edge_index)
-        x = self.bn2(x)
-        x = F.relu(x)
+#         x = self.sage_conv(x, edge_index)
+#         x = self.bn2(x)
+#         x = F.relu(x)
         
-        x = F.dropout(x, p=self.dropout, training=self.training)
+#         x = F.dropout(x, p=self.dropout, training=self.training)
         
-        out = self.out_proj(x)
-        return F.log_softmax(out, dim=1)
+#         out = self.out_proj(x)
+#         return F.log_softmax(out, dim=1)
+
+
+# class MixHopGINModel(torch.nn.Module):
+#     """GIN with MixHop using MixHopConv with BatchNorm"""
+#     def __init__(self, in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2]):
+#         super(MixHopGINModel, self).__init__()
+#         self.powers = powers
+#         self.num_hops = len(powers)
+        
+#         self.mixhop_conv = MixHopConv(
+#             in_channels=in_channels,
+#             out_channels=hidden_channels,
+#             powers=powers,
+#             add_self_loops=True
+#         )
+        
+#         self.bn1 = nn.BatchNorm1d(hidden_channels * self.num_hops)
+        
+#         self.gin_conv = GINConv(MLP([hidden_channels * self.num_hops, hidden_channels, hidden_channels], dropout=dropout))
+        
+#         self.bn2 = nn.BatchNorm1d(hidden_channels)
+        
+#         self.out_proj = nn.Linear(hidden_channels, out_channels)
+#         self.dropout = dropout
+
+#     def forward(self, data):
+#         x, edge_index = data.x, data.edge_index
+        
+#         x = self.mixhop_conv(x, edge_index)
+#         x = self.bn1(x)
+#         x = F.relu(x)
+        
+#         x = self.gin_conv(x, edge_index)
+#         x = self.bn2(x)
+#         x = F.relu(x)
+        
+#         x = F.dropout(x, p=self.dropout, training=self.training)
+        
+#         out = self.out_proj(x)
+#         return F.log_softmax(out, dim=1)
 
 
 # ==============================================================================
@@ -911,30 +911,30 @@ class MixHopGINModel_K4(MixHopGINModel):
 
 
 # Model class mapping
-MODEL_CLASSES = {
-    'GCN': GCNModel,
-    'GAT': GATModel,
-    'GraphSAGE': GraphSAGEModel,
-    'GIN': GINModel,
-    'APPNP': APPNPModel,
-    'ChebNet': ChebNetModel,
-    'GCNII': GCNIIModel,
-    # MixHop variants (using MixHopConv)
-    'MixHop_GCN': MixHopGCNModel,
-    'MixHop_GAT': MixHopGATModel,
-    'MixHop_GraphSAGE': MixHopGraphSAGEModel,
-    'MixHop_GIN': MixHopGINModel,
-    # MixHop K=3 variants (deeper neighborhood mixing)
-    'MixHop_GCN_K3': MixHopGCNModel_K3,
-    'MixHop_GAT_K3': MixHopGATModel_K3,
-    'MixHop_GraphSAGE_K3': MixHopGraphSAGEModel_K3,
-    'MixHop_GIN_K3': MixHopGINModel_K3,
-    # MixHop K=4 variants (even deeper neighborhood mixing)
-    'MixHop_GCN_K4': MixHopGCNModel_K4,
-    'MixHop_GAT_K4': MixHopGATModel_K4,
-    'MixHop_GraphSAGE_K4': MixHopGraphSAGEModel_K4,
-    'MixHop_GIN_K4': MixHopGINModel_K4,
-}
+# MODEL_CLASSES = {
+#     'GCN': GCNModel,
+#     'GAT': GATModel,
+#     'GraphSAGE': GraphSAGEModel,
+#     'GIN': GINModel,
+#     'APPNP': APPNPModel,
+#     'ChebNet': ChebNetModel,
+#     'GCNII': GCNIIModel,
+#     # MixHop variants (using MixHopConv)
+#     'MixHop_GCN': MixHopGCNModel,
+#     'MixHop_GAT': MixHopGATModel,
+#     'MixHop_GraphSAGE': MixHopGraphSAGEModel,
+#     'MixHop_GIN': MixHopGINModel,
+#     # MixHop K=3 variants (deeper neighborhood mixing)
+#     'MixHop_GCN_K3': MixHopGCNModel_K3,
+#     'MixHop_GAT_K3': MixHopGATModel_K3,
+#     'MixHop_GraphSAGE_K3': MixHopGraphSAGEModel_K3,
+#     'MixHop_GIN_K3': MixHopGINModel_K3,
+#     # MixHop K=4 variants (even deeper neighborhood mixing)
+#     'MixHop_GCN_K4': MixHopGCNModel_K4,
+#     'MixHop_GAT_K4': MixHopGATModel_K4,
+#     'MixHop_GraphSAGE_K4': MixHopGraphSAGEModel_K4,
+#     'MixHop_GIN_K4': MixHopGINModel_K4,
+# }
 
 
 
@@ -1114,76 +1114,76 @@ class Trainer:
 # Data Loading
 # ==============================================================================
 
-def load_elliptic_data(dataset_dir='Dataset'):
-    """Load Elliptic Bitcoin transaction dataset"""
-    print("Loading Elliptic dataset...")
+# def load_elliptic_data(dataset_dir='Dataset'):
+#     """Load Elliptic Bitcoin transaction dataset"""
+#     print("Loading Elliptic dataset...")
     
-    classes_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_classes.csv'))
-    edgelist_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv'))
-    features_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_features.csv'), header=None)
+#     classes_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_classes.csv'))
+#     edgelist_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv'))
+#     features_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_features.csv'), header=None)
 
-    features_df.rename(columns={0: 'txId', 1: 'timestep'}, inplace=True)
-    features_df.columns = ['txId', 'timestep'] + [f'feature_{i}' for i in range(2, features_df.shape[1])]
+#     features_df.rename(columns={0: 'txId', 1: 'timestep'}, inplace=True)
+#     features_df.columns = ['txId', 'timestep'] + [f'feature_{i}' for i in range(2, features_df.shape[1])]
 
-    nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
+#     nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
 
-    features = nodes_df[nodes_df.columns[2:-1]].values
-    x = torch.tensor(features, dtype=torch.float)
+#     features = nodes_df[nodes_df.columns[2:-1]].values
+#     x = torch.tensor(features, dtype=torch.float)
 
-    print(f"Loaded {x.size(0)} nodes with {x.size(1)} features")
+#     print(f"Loaded {x.size(0)} nodes with {x.size(1)} features")
 
-    labels = nodes_df['class'].apply(lambda c: 0 if c == '2' else (1 if c == '1' else -1))
-    y = torch.tensor(labels.values, dtype=torch.long)
+#     labels = nodes_df['class'].apply(lambda c: 0 if c == '2' else (1 if c == '1' else -1))
+#     y = torch.tensor(labels.values, dtype=torch.long)
 
-    print(f"Label distribution: licit: {(y == 0).sum().item()}, illicit: {(y == 1).sum().item()}, unknown: {(y == -1).sum().item()}")
+#     print(f"Label distribution: licit: {(y == 0).sum().item()}, illicit: {(y == 1).sum().item()}, unknown: {(y == -1).sum().item()}")
 
-    tx_id_map = {tx_id: i for i, tx_id in enumerate(nodes_df['txId'].values)}
+#     tx_id_map = {tx_id: i for i, tx_id in enumerate(nodes_df['txId'].values)}
 
-    source_indices = []
-    target_indices = []
-    for _, row in edgelist_df.iterrows():
-        src = row['txId1'] if 'txId1' in edgelist_df.columns else row.iloc[0]
-        tgt = row['txId2'] if 'txId2' in edgelist_df.columns else row.iloc[1]
-        if src in tx_id_map and tgt in tx_id_map:
-            source_indices.append(tx_id_map[src])
-            target_indices.append(tx_id_map[tgt])
+#     source_indices = []
+#     target_indices = []
+#     for _, row in edgelist_df.iterrows():
+#         src = row['txId1'] if 'txId1' in edgelist_df.columns else row.iloc[0]
+#         tgt = row['txId2'] if 'txId2' in edgelist_df.columns else row.iloc[1]
+#         if src in tx_id_map and tgt in tx_id_map:
+#             source_indices.append(tx_id_map[src])
+#             target_indices.append(tx_id_map[tgt])
 
-    edge_index = torch.tensor([source_indices, target_indices], dtype=torch.long)
-    print(f"Graph structure: {edge_index.size(1)} edges")
+#     edge_index = torch.tensor([source_indices, target_indices], dtype=torch.long)
+#     print(f"Graph structure: {edge_index.size(1)} edges")
 
-    data = Data(x=x, y=y, edge_index=edge_index)
-    data.timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
+#     data = Data(x=x, y=y, edge_index=edge_index)
+#     data.timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
 
-    known_mask = y != -1
-    data.train_mask = (data.timesteps < 35) & known_mask
-    data.val_mask = (data.timesteps >= 35) & (data.timesteps < 42) & known_mask
-    data.test_mask = (data.timesteps >= 42) & known_mask
+#     known_mask = y != -1
+#     data.train_mask = (data.timesteps < 35) & known_mask
+#     data.val_mask = (data.timesteps >= 35) & (data.timesteps < 42) & known_mask
+#     data.test_mask = (data.timesteps >= 42) & known_mask
 
-    print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
+#     print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
 
-    return data
+#     return data
 
 
 # ==============================================================================
 # NeighborLoader for Mini-batch Training
 # ==============================================================================
 
-def create_neighbor_loader(data, batch_size=1024, num_neighbors=[10, 5], shuffle=True):
-    """Create NeighborLoader for mini-batch subgraph sampling"""
+# def create_neighbor_loader(data, batch_size=1024, num_neighbors=[10, 5], shuffle=True):
+#     """Create NeighborLoader for mini-batch subgraph sampling"""
     
-    print(f"Creating NeighborLoader with batch_size={batch_size}, num_neighbors={num_neighbors}")
+#     print(f"Creating NeighborLoader with batch_size={batch_size}, num_neighbors={num_neighbors}")
     
-    train_indices = torch.where(data.train_mask)[0]
+#     train_indices = torch.where(data.train_mask)[0]
     
-    loader = NeighborLoader(
-        data,
-        num_neighbors=num_neighbors,
-        batch_size=batch_size,
-        input_nodes=train_indices,
-        shuffle=shuffle
-    )
+#     loader = NeighborLoader(
+#         data,
+#         num_neighbors=num_neighbors,
+#         batch_size=batch_size,
+#         input_nodes=train_indices,
+#         shuffle=shuffle
+#     )
 
-    return loader
+#     return loader
 
 
 # ==============================================================================
@@ -1203,372 +1203,372 @@ ALL_MODELS_TO_OPTIMIZE = [
     'MixHop_GCN_K4', 'MixHop_GAT_K4', 'MixHop_GraphSAGE_K4', 'MixHop_GIN_K4',  # K=4
 ]
 
-def set_optuna_params(data, device):
-    """Set global parameters for Optuna objective function"""
-    global _optuna_data, _optuna_device, _optuna_neighbor_loader
-    _optuna_data = data
-    _optuna_device = device
+# def set_optuna_params(data, device):
+#     """Set global parameters for Optuna objective function"""
+#     global _optuna_data, _optuna_device, _optuna_neighbor_loader
+#     _optuna_data = data
+#     _optuna_device = device
     
-    # Create NeighborLoader for mini-batch training during Optuna optimization
-    _optuna_neighbor_loader = create_neighbor_loader(data)
+#     # Create NeighborLoader for mini-batch training during Optuna optimization
+#     _optuna_neighbor_loader = create_neighbor_loader(data)
 
-def optuna_objective(trial):
-    """Optuna optimization objective function - optimizes all GNN models"""
-    global _optuna_data, _optuna_device, _optuna_neighbor_loader
+# def optuna_objective(trial):
+#     """Optuna optimization objective function - optimizes all GNN models"""
+#     global _optuna_data, _optuna_device, _optuna_neighbor_loader
     
-    torch.manual_seed(RANDOM_SEED)
-    np.random.seed(RANDOM_SEED)
-    random.seed(RANDOM_SEED)
+#     torch.manual_seed(RANDOM_SEED)
+#     np.random.seed(RANDOM_SEED)
+#     random.seed(RANDOM_SEED)
 
-    # Select model to optimize
-    model_name = trial.suggest_categorical('model_name', ALL_MODELS_TO_OPTIMIZE)
+#     # Select model to optimize
+#     model_name = trial.suggest_categorical('model_name', ALL_MODELS_TO_OPTIMIZE)
     
-    # Suggest hyperparameters using Optuna
-    hidden_channels = trial.suggest_categorical('hidden_channels', [32, 64, 128, 256])
-    dropout = trial.suggest_float('dropout', 0.1, 0.5, log=False)
-    lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
-    num_heads = trial.suggest_categorical('num_heads', [4, 8])
+#     # Suggest hyperparameters using Optuna
+#     hidden_channels = trial.suggest_categorical('hidden_channels', [32, 64, 128, 256])
+#     dropout = trial.suggest_float('dropout', 0.1, 0.5, log=False)
+#     lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
+#     num_heads = trial.suggest_categorical('num_heads', [4, 8])
 
-    model_class = MODEL_CLASSES.get(model_name)
+#     model_class = MODEL_CLASSES.get(model_name)
     
-    try:
-        # Build model args - only GAT variants need num_heads
-        model_args = {
-            'in_channels': _optuna_data.x.size(1),
-            'hidden_channels': hidden_channels,
-            'out_channels': 2,
-            'dropout': dropout
-        }
-        if 'GAT' in model_name:
-            model_args['num_heads'] = num_heads
+#     try:
+#         # Build model args - only GAT variants need num_heads
+#         model_args = {
+#             'in_channels': _optuna_data.x.size(1),
+#             'hidden_channels': hidden_channels,
+#             'out_channels': 2,
+#             'dropout': dropout
+#         }
+#         if 'GAT' in model_name:
+#             model_args['num_heads'] = num_heads
         
-        model = model_class(**model_args)
+#         model = model_class(**model_args)
 
-        model = model.to(_optuna_device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+#         model = model.to(_optuna_device)
+#         optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         
-        alpha_val = 1.0
-        criterion = FocalLoss(alpha=alpha_val, gamma=6)
+#         alpha_val = 1.0
+#         criterion = FocalLoss(alpha=alpha_val, gamma=6)
 
-        trainer = Trainer(model, _optuna_data, _optuna_device, optimizer, criterion,
-                          use_neighbor_loader=True, neighbor_loader=_optuna_neighbor_loader)
-        best_stats, _ = trainer.fit(epochs=30)
+#         trainer = Trainer(model, _optuna_data, _optuna_device, optimizer, criterion,
+#                           use_neighbor_loader=True, neighbor_loader=_optuna_neighbor_loader)
+#         best_stats, _ = trainer.fit(epochs=30)
 
-        # Use composite score: 0.4*Macro-F1 + 0.3*G-Mean + 0.3*Macro-AUC with threshold optimization
-        val_y_true = _optuna_data.y[_optuna_data.val_mask].cpu().numpy()
+#         # Use composite score: 0.4*Macro-F1 + 0.3*G-Mean + 0.3*Macro-AUC with threshold optimization
+#         val_y_true = _optuna_data.y[_optuna_data.val_mask].cpu().numpy()
         
-        # Get validation probabilities
-        model.eval()
-        with torch.no_grad():
-            out = model(_optuna_data)
-            val_probs = torch.exp(out).cpu().numpy()
-            val_mask_np = _optuna_data.val_mask.cpu().numpy()
-            val_probs_np = val_probs[val_mask_np][:, 1]
+#         # Get validation probabilities
+#         model.eval()
+#         with torch.no_grad():
+#             out = model(_optuna_data)
+#             val_probs = torch.exp(out).cpu().numpy()
+#             val_mask_np = _optuna_data.val_mask.cpu().numpy()
+#             val_probs_np = val_probs[val_mask_np][:, 1]
         
-        best_thresh, metrics = find_optimal_threshold(val_y_true, val_probs_np)
-        val_pred = (val_probs_np >= best_thresh).astype(int)
+#         best_thresh, metrics = find_optimal_threshold(val_y_true, val_probs_np)
+#         val_pred = (val_probs_np >= best_thresh).astype(int)
         
-        val_macro_f1 = f1_score(val_y_true, val_pred, average='macro', zero_division=0)
-        val_gmean = metrics['gmean']
-        val_macro_auc = metrics['macro_auc']
+#         val_macro_f1 = f1_score(val_y_true, val_pred, average='macro', zero_division=0)
+#         val_gmean = metrics['gmean']
+#         val_macro_auc = metrics['macro_auc']
         
-        composite_score = 0.4 * val_macro_f1 + 0.3 * val_gmean + 0.3 * val_macro_auc
+#         composite_score = 0.4 * val_macro_f1 + 0.3 * val_gmean + 0.3 * val_macro_auc
         
-        trial.report(composite_score, step=30)
+#         trial.report(composite_score, step=30)
 
-        return composite_score
-    except optuna.exceptions.TrialPruned:
-        # Re-raise pruning exceptions so Optuna handles them properly
-        raise
-    except Exception as e:
-        print(f"Error in Optuna objective ({model_name}): {e}")
-        return 0.0
+#         return composite_score
+#     except optuna.exceptions.TrialPruned:
+#         # Re-raise pruning exceptions so Optuna handles them properly
+#         raise
+#     except Exception as e:
+#         print(f"Error in Optuna objective ({model_name}): {e}")
+#         return 0.0
 
 
 # ==============================================================================
 # Evaluation Functions
 # ==============================================================================
 
-def calculate_all_metrics(y_true, y_pred, y_probs):
-    """Calculate all evaluation metrics in sorted order"""
+# def calculate_all_metrics(y_true, y_pred, y_probs):
+#     """Calculate all evaluation metrics in sorted order"""
     
-    macro_f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
-    macro_precision = precision_score(y_true, y_pred, average='macro', zero_division=0)
-    macro_recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
-    macro_auc = roc_auc_score(y_true, y_probs[:, 1], average='macro')
-    f1 = f1_score(y_true, y_pred, average='binary', pos_label=1, zero_division=0)
-    precision = precision_score(y_true, y_pred, pos_label=1, zero_division=0)
-    recall = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
-    auc = roc_auc_score(y_true, y_probs[:, 1])
-    accuracy = accuracy_score(y_true, y_pred)
+#     macro_f1 = f1_score(y_true, y_pred, average='macro', zero_division=0)
+#     macro_precision = precision_score(y_true, y_pred, average='macro', zero_division=0)
+#     macro_recall = recall_score(y_true, y_pred, average='macro', zero_division=0)
+#     macro_auc = roc_auc_score(y_true, y_probs[:, 1], average='macro')
+#     f1 = f1_score(y_true, y_pred, average='binary', pos_label=1, zero_division=0)
+#     precision = precision_score(y_true, y_pred, pos_label=1, zero_division=0)
+#     recall = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
+#     auc = roc_auc_score(y_true, y_probs[:, 1])
+#     accuracy = accuracy_score(y_true, y_pred)
     
-    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-    if cm.shape == (2, 2):
-        tn, fp, fn, tp = cm.ravel()
-        specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-    else:
-        specificity = 0
+#     cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+#     if cm.shape == (2, 2):
+#         tn, fp, fn, tp = cm.ravel()
+#         specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+#     else:
+#         specificity = 0
     
-    gmean = np.sqrt(recall * specificity) if recall * specificity > 0 else 0
+#     gmean = np.sqrt(recall * specificity) if recall * specificity > 0 else 0
 
-    return {
-        'macro_f1': macro_f1, 'macro_precision': macro_precision, 'macro_recall': macro_recall,
-        'macro_auc': macro_auc, 'gmean': gmean, 'specificity': specificity,
-        'f1': f1, 'precision': precision, 'recall': recall, 'auc': auc, 'accuracy': accuracy
-    }
-
-
-def find_optimal_threshold(y_true, y_probs):
-    """Find optimal classification threshold to maximize 0.4*Macro-F1 + 0.3*G-Mean + 0.3*Macro-AUC"""
-    
-    thresholds = np.arange(0.05, 0.95, 0.05)
-    best_threshold = 0.5
-    best_score = 0
-    best_metrics = None
-    
-    for thresh in thresholds:
-        y_pred_adj = (y_probs >= thresh).astype(int)
-        
-        f1 = f1_score(y_true, y_pred_adj, pos_label=1, zero_division=0)
-        macro_f1 = f1_score(y_true, y_pred_adj, average='macro', zero_division=0)
-        
-        cm = confusion_matrix(y_true, y_pred_adj, labels=[0, 1])
-        if cm.shape == (2, 2):
-            tn, fp, fn, tp = cm.ravel()
-            sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
-            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
-            gmean = np.sqrt(sensitivity * specificity) if sensitivity * specificity > 0 else 0
-        else:
-            gmean = 0
-            sensitivity = 0
-            specificity = 0
-        
-        macro_auc = roc_auc_score(y_true, y_probs)
-        
-        score = 0.4 * macro_f1 + 0.3 * gmean + 0.3 * macro_auc
-        
-        if score > best_score:
-            best_score = score
-            best_threshold = thresh
-            best_metrics = {
-                'macro_f1': macro_f1,
-                'gmean': gmean,
-                'macro_auc': macro_auc,
-                'sensitivity': sensitivity,
-                'specificity': specificity,
-                'threshold': thresh,
-                'composite_score': score
-            }
-    
-    return best_threshold, best_metrics
+#     return {
+#         'macro_f1': macro_f1, 'macro_precision': macro_precision, 'macro_recall': macro_recall,
+#         'macro_auc': macro_auc, 'gmean': gmean, 'specificity': specificity,
+#         'f1': f1, 'precision': precision, 'recall': recall, 'auc': auc, 'accuracy': accuracy
+#     }
 
 
-def apply_threshold_tuning(y_true, y_probs):
-    """Apply threshold tuning and return optimized predictions
+# def find_optimal_threshold(y_true, y_probs):
+#     """Find optimal classification threshold to maximize 0.4*Macro-F1 + 0.3*G-Mean + 0.3*Macro-AUC"""
     
-    Returns:
-        y_pred_optimized: Optimized predictions
-        optimal_threshold: The threshold used
-        metrics_at_optimal: Metrics at optimal threshold
-    """
-    # Use balanced metric to optimize both F1 and G-mean
-    optimal_threshold, metrics_at_optimal = find_optimal_threshold(y_true, y_probs)
+#     thresholds = np.arange(0.05, 0.95, 0.05)
+#     best_threshold = 0.5
+#     best_score = 0
+#     best_metrics = None
     
-    # Apply optimal threshold
-    y_pred_optimized = (y_probs >= optimal_threshold).astype(int)
+#     for thresh in thresholds:
+#         y_pred_adj = (y_probs >= thresh).astype(int)
+        
+#         f1 = f1_score(y_true, y_pred_adj, pos_label=1, zero_division=0)
+#         macro_f1 = f1_score(y_true, y_pred_adj, average='macro', zero_division=0)
+        
+#         cm = confusion_matrix(y_true, y_pred_adj, labels=[0, 1])
+#         if cm.shape == (2, 2):
+#             tn, fp, fn, tp = cm.ravel()
+#             sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+#             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+#             gmean = np.sqrt(sensitivity * specificity) if sensitivity * specificity > 0 else 0
+#         else:
+#             gmean = 0
+#             sensitivity = 0
+#             specificity = 0
+        
+#         macro_auc = roc_auc_score(y_true, y_probs)
+        
+#         score = 0.4 * macro_f1 + 0.3 * gmean + 0.3 * macro_auc
+        
+#         if score > best_score:
+#             best_score = score
+#             best_threshold = thresh
+#             best_metrics = {
+#                 'macro_f1': macro_f1,
+#                 'gmean': gmean,
+#                 'macro_auc': macro_auc,
+#                 'sensitivity': sensitivity,
+#                 'specificity': specificity,
+#                 'threshold': thresh,
+#                 'composite_score': score
+#             }
     
-    return y_pred_optimized, optimal_threshold, metrics_at_optimal
+#     return best_threshold, best_metrics
+
+
+# def apply_threshold_tuning(y_true, y_probs):
+#     """Apply threshold tuning and return optimized predictions
+    
+#     Returns:
+#         y_pred_optimized: Optimized predictions
+#         optimal_threshold: The threshold used
+#         metrics_at_optimal: Metrics at optimal threshold
+#     """
+#     # Use balanced metric to optimize both F1 and G-mean
+#     optimal_threshold, metrics_at_optimal = find_optimal_threshold(y_true, y_probs)
+    
+#     # Apply optimal threshold
+#     y_pred_optimized = (y_probs >= optimal_threshold).astype(int)
+    
+#     return y_pred_optimized, optimal_threshold, metrics_at_optimal
 
 
 # ==============================================================================
 # Genetic Algorithm for Model Selection and Ensemble Optimization
 # ==============================================================================
 
-class GeneticAlgorithmEnsemble:
-    """Genetic Algorithm for selecting optimal GNN model combinations and weights"""
+# class GeneticAlgorithmEnsemble:
+#     """Genetic Algorithm for selecting optimal GNN model combinations and weights"""
     
-    def __init__(self, model_names, population_size=20, generations=30, 
-                 crossover_rate=0.8, mutation_rate=0.1, elite_count=2,
-                 fitness_metric='macro_f1', random_seed=RANDOM_SEED):
-        self.model_names = model_names
-        self.num_models = len(model_names)
-        self.population_size = population_size
-        self.generations = generations
-        self.crossover_rate = crossover_rate
-        self.mutation_rate = mutation_rate
-        self.elite_count = elite_count
-        self.fitness_metric = fitness_metric
-        np.random.seed(random_seed)
+#     def __init__(self, model_names, population_size=20, generations=30, 
+#                  crossover_rate=0.8, mutation_rate=0.1, elite_count=2,
+#                  fitness_metric='macro_f1', random_seed=RANDOM_SEED):
+#         self.model_names = model_names
+#         self.num_models = len(model_names)
+#         self.population_size = population_size
+#         self.generations = generations
+#         self.crossover_rate = crossover_rate
+#         self.mutation_rate = mutation_rate
+#         self.elite_count = elite_count
+#         self.fitness_metric = fitness_metric
+#         np.random.seed(random_seed)
         
-    def _create_chromosome(self):
-        selection = np.random.binomial(1, 0.5, self.num_models)
-        weights = np.random.dirichlet(np.ones(self.num_models))
-        return np.concatenate([selection, weights])
+#     def _create_chromosome(self):
+#         selection = np.random.binomial(1, 0.5, self.num_models)
+#         weights = np.random.dirichlet(np.ones(self.num_models))
+#         return np.concatenate([selection, weights])
     
-    def _decode_chromosome(self, chromosome):
-        selection = chromosome[:self.num_models].astype(bool)
-        weights = chromosome[self.num_models:]
+#     def _decode_chromosome(self, chromosome):
+#         selection = chromosome[:self.num_models].astype(bool)
+#         weights = chromosome[self.num_models:]
         
-        if selection.sum() > 0:
-            weights = weights * selection
-            if weights.sum() > 0:
-                weights = weights / weights.sum()
-            else:
-                weights = selection / selection.sum() if selection.sum() > 0 else weights
-        return selection, weights
+#         if selection.sum() > 0:
+#             weights = weights * selection
+#             if weights.sum() > 0:
+#                 weights = weights / weights.sum()
+#             else:
+#                 weights = selection / selection.sum() if selection.sum() > 0 else weights
+#         return selection, weights
     
-    def _fitness(self, chromosome, all_probs, y_true, val_mask):
-        selection, weights = self._decode_chromosome(chromosome)
+#     def _fitness(self, chromosome, all_probs, y_true, val_mask):
+#         selection, weights = self._decode_chromosome(chromosome)
         
-        if selection.sum() < 2:
-            return 0.0
+#         if selection.sum() < 2:
+#             return 0.0
         
-        selected_probs = []
-        for i, (sel, prob) in enumerate(zip(selection, all_probs)):
-            if sel:
-                selected_probs.append(prob)
+#         selected_probs = []
+#         for i, (sel, prob) in enumerate(zip(selection, all_probs)):
+#             if sel:
+#                 selected_probs.append(prob)
         
-        if len(selected_probs) < 2:
-            return 0.0
+#         if len(selected_probs) < 2:
+#             return 0.0
         
-        selected_probs = np.array(selected_probs)
-        weights = weights[selection]
-        weights = weights / weights.sum()
+#         selected_probs = np.array(selected_probs)
+#         weights = weights[selection]
+#         weights = weights / weights.sum()
         
-        ensemble_probs = np.tensordot(weights, selected_probs, axes=([0], [0]))
+#         ensemble_probs = np.tensordot(weights, selected_probs, axes=([0], [0]))
         
-        if val_mask is not None:
-            probs_val = ensemble_probs[val_mask]
-            y_val = y_true[val_mask]
-        else:
-            probs_val = ensemble_probs
-            y_val = y_true
+#         if val_mask is not None:
+#             probs_val = ensemble_probs[val_mask]
+#             y_val = y_true[val_mask]
+#         else:
+#             probs_val = ensemble_probs
+#             y_val = y_true
         
-        # Use composite score: 0.4*Macro-F1 + 0.3*G-Mean + 0.3*Macro-AUC
-        best_thresh, metrics = find_optimal_threshold(y_val, probs_val[:, 1])
-        predictions = (probs_val[:, 1] >= best_thresh).astype(int)
+#         # Use composite score: 0.4*Macro-F1 + 0.3*G-Mean + 0.3*Macro-AUC
+#         best_thresh, metrics = find_optimal_threshold(y_val, probs_val[:, 1])
+#         predictions = (probs_val[:, 1] >= best_thresh).astype(int)
         
-        macro_f1 = f1_score(y_val, predictions, average='macro', zero_division=0)
-        gmean = metrics['gmean']
-        macro_auc = metrics['macro_auc']
+#         macro_f1 = f1_score(y_val, predictions, average='macro', zero_division=0)
+#         gmean = metrics['gmean']
+#         macro_auc = metrics['macro_auc']
         
-        fitness = 0.4 * macro_f1 + 0.3 * gmean + 0.3 * macro_auc
+#         fitness = 0.4 * macro_f1 + 0.3 * gmean + 0.3 * macro_auc
         
-        return fitness
+#         return fitness
     
-    def _selection(self, population, fitnesses):
-        selected = []
-        for _ in range(len(population)):
-            idx = np.random.choice(len(population), size=min(3, len(population)), replace=False)
-            best_idx = idx[np.argmax(fitnesses[idx])]
-            selected.append(population[best_idx].copy())
-        return selected
+#     def _selection(self, population, fitnesses):
+#         selected = []
+#         for _ in range(len(population)):
+#             idx = np.random.choice(len(population), size=min(3, len(population)), replace=False)
+#             best_idx = idx[np.argmax(fitnesses[idx])]
+#             selected.append(population[best_idx].copy())
+#         return selected
     
-    def _crossover(self, parent1, parent2):
-        if np.random.rand() < self.crossover_rate:
-            point = np.random.randint(1, len(parent1))
-            child1 = np.concatenate([parent1[:point], parent2[point:]])
-            child2 = np.concatenate([parent2[:point], parent1[point:]])
-            return child1, child2
-        return parent1.copy(), parent2.copy()
+#     def _crossover(self, parent1, parent2):
+#         if np.random.rand() < self.crossover_rate:
+#             point = np.random.randint(1, len(parent1))
+#             child1 = np.concatenate([parent1[:point], parent2[point:]])
+#             child2 = np.concatenate([parent2[:point], parent1[point:]])
+#             return child1, child2
+#         return parent1.copy(), parent2.copy()
     
-    def _mutation(self, chromosome):
-        for i in range(self.num_models):
-            if np.random.rand() < self.mutation_rate:
-                chromosome[i] = 1 - chromosome[i]
+#     def _mutation(self, chromosome):
+#         for i in range(self.num_models):
+#             if np.random.rand() < self.mutation_rate:
+#                 chromosome[i] = 1 - chromosome[i]
         
-        weight_part = chromosome[self.num_models:]
-        noise = np.random.normal(0, 0.1, self.num_models)
-        weight_part = weight_part + noise
-        weight_part = np.clip(weight_part, 0, 1)
-        weight_part = np.maximum(weight_part, 0)
+#         weight_part = chromosome[self.num_models:]
+#         noise = np.random.normal(0, 0.1, self.num_models)
+#         weight_part = weight_part + noise
+#         weight_part = np.clip(weight_part, 0, 1)
+#         weight_part = np.maximum(weight_part, 0)
         
-        if weight_part.sum() > 0:
-            weight_part = weight_part / weight_part.sum()
+#         if weight_part.sum() > 0:
+#             weight_part = weight_part / weight_part.sum()
         
-        chromosome[self.num_models:] = weight_part
-        return chromosome
+#         chromosome[self.num_models:] = weight_part
+#         return chromosome
     
-    def fit(self, all_probs, y_true, val_mask, verbose=True):
-        """Run genetic algorithm to find optimal model combination"""
-        if verbose:
-            print(f"\nRunning Genetic Algorithm...")
-            print(f"  Population: {self.population_size}, Generations: {self.generations}")
-            print(f"  Metric: {self.fitness_metric}")
-            print(f"  Models: {self.model_names}")
+#     def fit(self, all_probs, y_true, val_mask, verbose=True):
+#         """Run genetic algorithm to find optimal model combination"""
+#         if verbose:
+#             print(f"\nRunning Genetic Algorithm...")
+#             print(f"  Population: {self.population_size}, Generations: {self.generations}")
+#             print(f"  Metric: {self.fitness_metric}")
+#             print(f"  Models: {self.model_names}")
         
-        population = [self._create_chromosome() for _ in range(self.population_size)]
+#         population = [self._create_chromosome() for _ in range(self.population_size)]
         
-        best_chromosome = None
-        best_fitness = -1
-        fitness_history = []
+#         best_chromosome = None
+#         best_fitness = -1
+#         fitness_history = []
         
-        for gen in range(self.generations):
-            fitnesses = np.array([self._fitness(ch, all_probs, y_true, val_mask) for ch in population])
+#         for gen in range(self.generations):
+#             fitnesses = np.array([self._fitness(ch, all_probs, y_true, val_mask) for ch in population])
             
-            gen_best_idx = np.argmax(fitnesses)
-            if fitnesses[gen_best_idx] > best_fitness:
-                best_fitness = fitnesses[gen_best_idx]
-                best_chromosome = population[gen_best_idx].copy()
+#             gen_best_idx = np.argmax(fitnesses)
+#             if fitnesses[gen_best_idx] > best_fitness:
+#                 best_fitness = fitnesses[gen_best_idx]
+#                 best_chromosome = population[gen_best_idx].copy()
             
-            fitness_history.append(best_fitness)
+#             fitness_history.append(best_fitness)
             
-            if verbose and (gen + 1) % 5 == 0:
-                print(f"  Generation {gen+1}: Best Fitness = {best_fitness:.4f}")
+#             if verbose and (gen + 1) % 5 == 0:
+#                 print(f"  Generation {gen+1}: Best Fitness = {best_fitness:.4f}")
             
-            selected = self._selection(population, fitnesses)
+#             selected = self._selection(population, fitnesses)
             
-            new_population = []
+#             new_population = []
             
-            elite_idx = np.argsort(fitnesses)[-self.elite_count:]
-            for idx in elite_idx:
-                new_population.append(population[idx].copy())
+#             elite_idx = np.argsort(fitnesses)[-self.elite_count:]
+#             for idx in elite_idx:
+#                 new_population.append(population[idx].copy())
             
-            while len(new_population) < self.population_size:
-                p1, p2 = np.random.choice(len(selected), size=2, replace=False)
-                c1, c2 = self._crossover(selected[p1], selected[p2])
-                c1 = self._mutation(c1)
-                c2 = self._mutation(c2)
-                new_population.extend([c1, c2])
+#             while len(new_population) < self.population_size:
+#                 p1, p2 = np.random.choice(len(selected), size=2, replace=False)
+#                 c1, c2 = self._crossover(selected[p1], selected[p2])
+#                 c1 = self._mutation(c1)
+#                 c2 = self._mutation(c2)
+#                 new_population.extend([c1, c2])
             
-            population = new_population[:self.population_size]
+#             population = new_population[:self.population_size]
         
-        self.best_selection, self.best_weights = self._decode_chromosome(best_chromosome)
-        self.best_fitness = best_fitness
-        self.fitness_history = fitness_history
+#         self.best_selection, self.best_weights = self._decode_chromosome(best_chromosome)
+#         self.best_fitness = best_fitness
+#         self.fitness_history = fitness_history
         
-        self.selected_models = [name for sel, name in zip(self.best_selection, self.model_names) if sel]
+#         self.selected_models = [name for sel, name in zip(self.best_selection, self.model_names) if sel]
         
-        if verbose:
-            print(f"\nGA Optimization Complete!")
-            print(f"  Best Fitness ({self.fitness_metric}): {best_fitness:.4f}")
-            print(f"  Selected Models: {self.selected_models}")
-            print(f"  Optimal Weights: {dict(zip(self.selected_models, self.best_weights[self.best_selection]))}")
+#         if verbose:
+#             print(f"\nGA Optimization Complete!")
+#             print(f"  Best Fitness ({self.fitness_metric}): {best_fitness:.4f}")
+#             print(f"  Selected Models: {self.selected_models}")
+#             print(f"  Optimal Weights: {dict(zip(self.selected_models, self.best_weights[self.best_selection]))}")
         
-        return self
+#         return self
     
-    def predict(self, all_probs, y_true=None, test_mask=None):
-        """Generate predictions using optimized weights"""
-        selected_probs = []
-        for i, (sel, prob) in enumerate(zip(self.best_selection, all_probs)):
-            if sel:
-                selected_probs.append(prob)
+#     def predict(self, all_probs, y_true=None, test_mask=None):
+#         """Generate predictions using optimized weights"""
+#         selected_probs = []
+#         for i, (sel, prob) in enumerate(zip(self.best_selection, all_probs)):
+#             if sel:
+#                 selected_probs.append(prob)
         
-        selected_probs = np.array(selected_probs)
-        weights = self.best_weights[self.best_selection]
-        weights = weights / weights.sum()
+#         selected_probs = np.array(selected_probs)
+#         weights = self.best_weights[self.best_selection]
+#         weights = weights / weights.sum()
         
-        ensemble_probs = np.tensordot(weights, selected_probs, axes=([0], [0]))
+#         ensemble_probs = np.tensordot(weights, selected_probs, axes=([0], [0]))
         
-        if test_mask is not None:
-            ensemble_probs = ensemble_probs[test_mask]
+#         if test_mask is not None:
+#             ensemble_probs = ensemble_probs[test_mask]
         
-        if y_true is not None:
-            best_thresh, _ = find_optimal_threshold(y_true, ensemble_probs[:, 1])
-            predictions = (ensemble_probs[:, 1] >= best_thresh).astype(int)
-            return predictions, best_thresh, ensemble_probs
+#         if y_true is not None:
+#             best_thresh, _ = find_optimal_threshold(y_true, ensemble_probs[:, 1])
+#             predictions = (ensemble_probs[:, 1] >= best_thresh).astype(int)
+#             return predictions, best_thresh, ensemble_probs
         
-        return ensemble_probs.argmax(axis=1), 0.5, ensemble_probs
+#         return ensemble_probs.argmax(axis=1), 0.5, ensemble_probs
 
 
 
