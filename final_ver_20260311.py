@@ -10,7 +10,8 @@
 ## blockchain dataset係 direction graph??
 ## generalization 同可解釋性intermitibility係同點？
 
-# 2026/3/12 已更新optuna 所有model，已加入GA，但未test
+# 2026/3/11 已更新optuna 所有model，已加入GA，但未test
+# 2026/3/12 已加入GA，但已test
 import os
 import numpy as np
 import pandas as pd
