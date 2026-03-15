@@ -1,6 +1,0 @@
-pip install torch torchvision torchaudio
-pip install torch_geometric
-pip install scikit-learn
-pip install matplotlib seaborn pandas numpy optuna networkx
-
-pip freeze

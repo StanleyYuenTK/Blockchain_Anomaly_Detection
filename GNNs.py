@@ -55,7 +55,14 @@ def GINModel(best_params=None):
 # APPNP 2 layer version 的表現很差，可能是因為 APPNP 的特性使得過多的層數反而會導致over-smoothing問題，從而降低模型的表現。
 # APPNP 2 layer version 的 recall, F1全部是0
 # =================================================================================
-# def APPNPModel(in_channels, hidden_channels, out_channels, dropout=0.5, K=10, alpha=0.1):
+# def APPNPModel(best_params=None):
+#     in_channels = best_params.get('in_channels', None)
+#     hidden_channels = best_params.get('hidden_channels', 64)
+#     out_channels = best_params.get('out_channels', 2)
+#     dropout = best_params.get('dropout', 0.5)
+#     K = best_params.get('K', 10)
+#     alpha = best_params.get('alpha', 0.1)
+
 #     return Sequential('x, edge_index', [
 #         ##    input layer, input layer ->   hidden layer
 #         (MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout), 'x -> x'),

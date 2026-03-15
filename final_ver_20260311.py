@@ -1,7 +1,7 @@
 # data preprocessing
 ## 0 done. catboosting (做完，但未理解，遲啲再解)
 ## 3 done. FocalLoss
-## 1. GA - done / optuna - done
+## 1. done - GA - done / optuna - done
 ## 2. update dataset
 ## 4. MixHop power [0, 1, 2, 3], [0, 1, 2, 3, 4]
 ## 5. optimizer = torch.optim.Adam(model.parameters(), lr=lr)?
@@ -11,7 +11,8 @@
 ## generalization 同可解釋性intermitibility係同點？
 
 # 2026/3/11 已更新optuna 所有model，已加入GA，但未test
-# 2026/3/12 已加入GA，但已test
+# 2026/3/12 已加入GA，已test
+import gc
 import os
 import numpy as np
 import pandas as pd
@@ -41,10 +42,11 @@ from visualization_tools import TrainingHistory, generate_standard_gnn_visualiza
 # GNN Models
 import inspect
 import GNNs
-import load_dataset
+import dataset_zoo
 
 ## Focal Loss https://kornia.readthedocs.io/en/latest/losses.html#kornia.losses.focal_loss
 from kornia.losses import FocalLoss
+import argparse
 
 RANDOM_SEED = 24027277
 n_trials=30
@@ -52,138 +54,138 @@ n_trials=30
 # ==============================================================================
 # 1. Data loading
 # ==============================================================================
-def load_elliptic_data(dataset_dir='Dataset'):
+# def load_elliptic_data(dataset_dir='Dataset'):
 
-    # 1. load data
-    classes_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_classes.csv'))
-    edgelist_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv'))
-    features_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_features.csv'), header=None)
+#     # 1. load data
+#     classes_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_classes.csv'))
+#     edgelist_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv'))
+#     features_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_features.csv'), header=None)
 
-    # 2. colA is id, colB is time steps
-    features_df.columns = ['txId', 'timestep'] + [f'feat_{i}' for i in range(2, features_df.shape[1])]
+#     # 2. colA is id, colB is time steps
+#     features_df.columns = ['txId', 'timestep'] + [f'feat_{i}' for i in range(2, features_df.shape[1])]
     
-    # 3. labelled class 2 (licit), labelled class 1 (illicit), unknown -> -1
-    nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
-    y = torch.tensor(nodes_df['class'].map({'2': 0, '1': 1}).fillna(-1).values, dtype=torch.long)
+#     # 3. labelled class 2 (licit), labelled class 1 (illicit), unknown -> -1
+#     nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
+#     y = torch.tensor(nodes_df['class'].map({'2': 0, '1': 1}).fillna(-1).values, dtype=torch.long)
     
-    # 4. 提取特徵 
-    x = torch.tensor(nodes_df.iloc[:, 1:-1].values, dtype=torch.float)
+#     # 4. 提取特徵 
+#     x = torch.tensor(nodes_df.iloc[:, 1:-1].values, dtype=torch.float)
 
-    # 5. 高效處理邊表 (取代 iterrows)
-    tx_id_map = {tx_id: i for i, tx_id in enumerate(nodes_df['txId'])}
+#     # 5. 高效處理邊表 (取代 iterrows)
+#     tx_id_map = {tx_id: i for i, tx_id in enumerate(nodes_df['txId'])}
     
-    # 使用 map 進行向量化轉換，速度提升顯著
-    edge_index_src = edgelist_df.iloc[:, 0].map(tx_id_map)
-    edge_index_tgt = edgelist_df.iloc[:, 1].map(tx_id_map)
+#     # 使用 map 進行向量化轉換，速度提升顯著
+#     edge_index_src = edgelist_df.iloc[:, 0].map(tx_id_map)
+#     edge_index_tgt = edgelist_df.iloc[:, 1].map(tx_id_map)
     
-    # 移除不在 map 中的無效邊 (dropna)
-    edges = pd.concat([edge_index_src, edge_index_tgt], axis=1).dropna().astype(int)
-    edge_index = torch.tensor(edges.values.T, dtype=torch.long)
+#     # 移除不在 map 中的無效邊 (dropna)
+#     edges = pd.concat([edge_index_src, edge_index_tgt], axis=1).dropna().astype(int)
+#     edge_index = torch.tensor(edges.values.T, dtype=torch.long)
 
-    # 6. 構建數據集與 Mask
-    data = Data(x=x, y=y, edge_index=edge_index)
-    data.timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
+#     # 6. 構建數據集與 Mask
+#     data = Data(x=x, y=y, edge_index=edge_index)
+#     data.timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
 
-    known_mask = (y != -1)
-    data.train_mask = (data.timesteps < 35) & known_mask
-    data.val_mask   = (data.timesteps >= 35) & (data.timesteps < 42) & known_mask
-    data.test_mask  = (data.timesteps >= 42) & known_mask
+#     known_mask = (y != -1)
+#     data.train_mask = (data.timesteps < 35) & known_mask
+#     data.val_mask   = (data.timesteps >= 35) & (data.timesteps < 42) & known_mask
+#     data.test_mask  = (data.timesteps >= 42) & known_mask
 
-    print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
+#     print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
 
-    return data
+#     return data
 
 
 # ==============================================================================
 # 2. Feature Engineering
 # ==============================================================================
 
-def get_pagerank_features(edge_index, num_nodes, alpha=0.15):
-    ppr_edge_index, ppr_weights = get_ppr(edge_index=edge_index, alpha=alpha, num_nodes=num_nodes)
-    return torch_scatter.scatter_add(ppr_weights, ppr_edge_index[1], dim=0, dim_size=num_nodes).reshape(-1, 1)
+# def get_pagerank_features(edge_index, num_nodes, alpha=0.15):
+#     ppr_edge_index, ppr_weights = get_ppr(edge_index=edge_index, alpha=alpha, num_nodes=num_nodes)
+#     return torch_scatter.scatter_add(ppr_weights, ppr_edge_index[1], dim=0, dim_size=num_nodes).reshape(-1, 1)
 
 
-def get_degree_features(edge_index, num_nodes):
-    # Calculate in/out degree
-    out_deg = degree(edge_index[0], num_nodes)
-    in_deg = degree(edge_index[1], num_nodes)
+# def get_degree_features(edge_index, num_nodes):
+#     # Calculate in/out degree
+#     out_deg = degree(edge_index[0], num_nodes)
+#     in_deg = degree(edge_index[1], num_nodes)
     
-    # Total degree and ratio
-    total_deg = in_deg + out_deg
-    in_out_ratio = in_deg / (out_deg + 1e-8)
+#     # Total degree and ratio
+#     total_deg = in_deg + out_deg
+#     in_out_ratio = in_deg / (out_deg + 1e-8)
     
-    # Log normalization (handle power law)
-    in_deg_log = torch.log1p(in_deg)
-    out_deg_log = torch.log1p(out_deg)
-    total_deg_log = torch.log1p(total_deg)
+#     # Log normalization (handle power law)
+#     in_deg_log = torch.log1p(in_deg)
+#     out_deg_log = torch.log1p(out_deg)
+#     total_deg_log = torch.log1p(total_deg)
     
-    # Ranking feature
-    total_deg_rank = torch.argsort(torch.argsort(total_deg, descending=True)).float() / num_nodes
+#     # Ranking feature
+#     total_deg_rank = torch.argsort(torch.argsort(total_deg, descending=True)).float() / num_nodes
 
-    return torch.stack([
-        in_deg, out_deg, in_deg_log, out_deg_log, total_deg_log, in_out_ratio, total_deg_rank
-    ], dim=1)
+#     return torch.stack([
+#         in_deg, out_deg, in_deg_log, out_deg_log, total_deg_log, in_out_ratio, total_deg_rank
+#     ], dim=1)
 
 
-def get_louvain_features(edge_index, num_nodes, labels=None, train_mask=None, resolution=1.0):
-     # Build graph using NetworkX (undirected)
-    G = nx.Graph()
-    edges = edge_index.t().cpu().numpy()
-    G.add_edges_from(edges)
+# def get_louvain_features(edge_index, num_nodes, labels=None, train_mask=None, resolution=1.0):
+#     # Build graph using NetworkX (undirected)
+#     G = nx.Graph()
+#     edges = edge_index.t().cpu().numpy()
+#     G.add_edges_from(edges)
     
-    # Run Louvain community detection
-    partition = community_louvain.best_partition(G, resolution=resolution, random_state=RANDOM_SEED)
+#     # Run Louvain community detection
+#     partition = community_louvain.best_partition(G, resolution=resolution, random_state=RANDOM_SEED)
     
-    # Get community IDs for all nodes
-    comm_ids = np.array([partition.get(i, -1) for i in range(num_nodes)])
+#     # Get community IDs for all nodes
+#     comm_ids = np.array([partition.get(i, -1) for i in range(num_nodes)])
     
-    # Compute community statistics
-    comm_size = {}
-    comm_train_illicit = {}
-    comm_train_total = {}
+#     # Compute community statistics
+#     comm_size = {}
+#     comm_train_illicit = {}
+#     comm_train_total = {}
     
-    labels_np = labels.cpu().numpy() if labels is not None else np.zeros(num_nodes)
-    train_mask_np = train_mask.cpu().numpy() if train_mask is not None else np.ones(num_nodes, dtype=bool)
+#     labels_np = labels.cpu().numpy() if labels is not None else np.zeros(num_nodes)
+#     train_mask_np = train_mask.cpu().numpy() if train_mask is not None else np.ones(num_nodes, dtype=bool)
     
-    # Calculate community stats (only on train set to prevent leakage)
-    for i in range(num_nodes):
-        cid = comm_ids[i]
-        if cid == -1:
-            continue
+#     # Calculate community stats (only on train set to prevent leakage)
+#     for i in range(num_nodes):
+#         cid = comm_ids[i]
+#         if cid == -1:
+#             continue
         
-        comm_size[cid] = comm_size.get(cid, 0) + 1
+#         comm_size[cid] = comm_size.get(cid, 0) + 1
         
-        if train_mask_np[i]:
-            if labels_np[i] == 1:  # Illicit
-                comm_train_illicit[cid] = comm_train_illicit.get(cid, 0) + 1
-            comm_train_total[cid] = comm_train_total.get(cid, 0) + 1
+#         if train_mask_np[i]:
+#             if labels_np[i] == 1:  # Illicit
+#                 comm_train_illicit[cid] = comm_train_illicit.get(cid, 0) + 1
+#             comm_train_total[cid] = comm_train_total.get(cid, 0) + 1
     
-    # Calculate internal degree (edges within same community)
-    row, col = edge_index
-    same_comm_mask = (torch.from_numpy(comm_ids[row]) == torch.from_numpy(comm_ids[col]))
-    internal_edge_index = edge_index[:, same_comm_mask]
-    internal_deg = degree(internal_edge_index[0], num_nodes)
-    total_deg = degree(edge_index[0], num_nodes)
+#     # Calculate internal degree (edges within same community)
+#     row, col = edge_index
+#     same_comm_mask = (torch.from_numpy(comm_ids[row]) == torch.from_numpy(comm_ids[col]))
+#     internal_edge_index = edge_index[:, same_comm_mask]
+#     internal_deg = degree(internal_edge_index[0], num_nodes)
+#     total_deg = degree(edge_index[0], num_nodes)
     
-    # Combine features
-    louvain_feat = torch.zeros((num_nodes, 5))
+#     # Combine features
+#     louvain_feat = torch.zeros((num_nodes, 5))
     
-    for i in range(num_nodes):
-        cid = comm_ids[i]
-        if cid == -1:
-            continue
+#     for i in range(num_nodes):
+#         cid = comm_ids[i]
+#         if cid == -1:
+#             continue
         
-        size = comm_size.get(cid, 1)
-        illicit_cnt = comm_train_illicit.get(cid, 0)
-        train_total = comm_train_total.get(cid, 1e-8)
+#         size = comm_size.get(cid, 1)
+#         illicit_cnt = comm_train_illicit.get(cid, 0)
+#         train_total = comm_train_total.get(cid, 1e-8)
         
-        louvain_feat[i, 0] = np.log1p(size)                    # Community size (log)
-        louvain_feat[i, 1] = illicit_cnt / train_total          # Illicit ratio
-        louvain_feat[i, 2] = 1.0 if illicit_cnt > 0 else 0.0   # Has illicit flag
-        louvain_feat[i, 3] = internal_deg[i] / (total_deg[i] + 1e-8)  # Internal degree ratio
-        louvain_feat[i, 4] = internal_deg[i] / (size)          # Average internal degree
+#         louvain_feat[i, 0] = np.log1p(size)                    # Community size (log)
+#         louvain_feat[i, 1] = illicit_cnt / train_total          # Illicit ratio
+#         louvain_feat[i, 2] = 1.0 if illicit_cnt > 0 else 0.0   # Has illicit flag
+#         louvain_feat[i, 3] = internal_deg[i] / (total_deg[i] + 1e-8)  # Internal degree ratio
+#         louvain_feat[i, 4] = internal_deg[i] / (size)          # Average internal degree
     
-    return louvain_feat, partition
+#     return louvain_feat, partition
 
 
 # ==============================================================================
@@ -192,28 +194,44 @@ def get_louvain_features(edge_index, num_nodes, labels=None, train_mask=None, re
 # ==============================================================================
 
 # 假設 X_val_meta 是你所有 GNN 預測結果組成的 DataFrame
-def fitness_func(ga_instance, solution, solution_idx, X_val_meta, data, y_val):
+def fitness_func(ga_instance, solution, solution_idx, 
+                 X_val_raw, val_ts, X_val_meta, y_val):
     # solution 是 GA 產生的 [1, 0, 1...] 陣列
     selected_cols = [i for i, bit in enumerate(solution) if bit == 1]
-    
+    print('selected_cols 1:', selected_cols)
+
+    selected_cols2 = np.where(solution == 1)[0]
+    print('selected_cols2:', selected_cols2)
+
     if len(selected_cols) == 0: return 0
     
     # 只選取部分 GNN 的預測作為特徵
-    X_val_subset = X_val_meta[:, selected_cols]
-    X_val_raw_and_meta = data.x[data.val_mask].cpu().numpy()
-    X_subset = np.hstack([X_val_raw_and_meta, X_val_subset])
-    
+    ga_train_mask = (val_ts < 39)
+    ga_val_mask = (val_ts >= 39)
+    X_ga_train_raw = X_val_raw[ga_train_mask]
+    X_ga_val_raw = X_val_raw[ga_val_mask]
+    y_ga_train = y_val[ga_train_mask]
+    y_ga_val = y_val[ga_val_mask]
+
+    X_ga_train_meta = X_val_meta[ga_train_mask][:, selected_cols]
+    X_ga_val_meta = X_val_meta[ga_val_mask][:, selected_cols]
+
+    # 合併 val < 39 的部分和 meta < 39 + selected_cols 的部分 
+    X_train_final = np.hstack([X_ga_train_raw, X_ga_train_meta])
+    # 合併 val >= 39 的部分和 meta >= 39 + selected_cols 的部分 
+    X_val_final = np.hstack([X_ga_val_raw, X_ga_val_meta])
+
     # 訓練一個簡單的 CatBoost 作為評估 (為了速度，可以減少 iterations)
-    clf = CatBoostClassifier(iterations=100, silent=True)
-    clf.fit(X_subset, y_val)
+    clf = CatBoostClassifier(iterations=20, silent=True)
+    clf.fit(X_train_final, y_ga_train)
     
     # 拿 Macro F1 score
-    preds = clf.predict(X_subset)
-    probs = clf.predict_proba(X_subset)[:, 1]
+    preds = clf.predict(X_val_final)
+    probs = clf.predict_proba(X_val_final)[:, 1]
 
-    c1_f1 = f1_score(y_val, preds)
-    macro_f1 = f1_score(y_val, preds, average='macro')
-    auc = roc_auc_score(y_val, probs)
+    c1_f1 = f1_score(y_ga_val, preds)
+    macro_f1 = f1_score(y_ga_val, preds, average='macro')
+    auc = roc_auc_score(y_ga_val, probs)
     weight_score = (0.4 * c1_f1) + (0.2 * macro_f1) + (0.4 * auc)
     return weight_score
 
@@ -224,33 +242,36 @@ def fitness_func(ga_instance, solution, solution_idx, X_val_meta, data, y_val):
 
 def gnn_objective(trial, model_name, data):
     """Optuna objective function for GNN model optimization"""
-
-    # Define search space
-    in_channels = data.x.size(1)
-    hidden_channels = trial.suggest_categorical('hidden_channels', [32, 64, 128, 256])
-    num_layers = trial.suggest_categorical('num_layers', [2, 3, 4])
-    out_channels = 2
-    dropout = trial.suggest_float('dropout', 0.1, 0.5, log=False)
-    heads = trial.suggest_categorical('heads', [4, 8])
-    lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
-    
-    # Create model
-    best_params = {
-        'in_channels': in_channels,
-        'hidden_channels': hidden_channels,
-        'num_layers': num_layers,
-        'out_channels': out_channels,
-        'dropout': dropout,
-        'heads': heads,
-        'lr': lr,
-    }
-    model = get_gnn(model_name, data, best_params)
-    model = train_gnn(model, data, epochs=100, lr=lr)
-    val_probs, val_preds, test_probs, test_preds = test_gnn(model, data)
-    model_val_performance, model_test_performance = eval_gnn(model_name, data.y[data.val_mask].cpu().numpy(), data.y[data.test_mask].cpu().numpy(), val_probs, val_preds, test_probs, test_preds)
-    ## macro f1 score, class 1 f1-score, auc
-    return model_val_performance['macro f1-score'], model_val_performance['class 1 f1-score'], model_val_performance['auc']
-
+    try:
+        # Define search space
+        in_channels = data.x.size(1)
+        hidden_channels = trial.suggest_categorical('hidden_channels', [32, 64]) #, 128, 256
+        num_layers = trial.suggest_categorical('num_layers', [2, 3]) #, 4
+        out_channels = 2
+        dropout = trial.suggest_float('dropout', 0.1, 0.5, log=False)
+        heads = trial.suggest_categorical('heads', [4, 8])
+        lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
+        
+        # Create model
+        best_params = {
+            'in_channels': in_channels,
+            'hidden_channels': hidden_channels,
+            'num_layers': num_layers,
+            'out_channels': out_channels,
+            'dropout': dropout,
+            'heads': heads,
+            'lr': lr,
+        }
+        model = get_gnn(model_name, data, best_params)
+        model = train_gnn(model, data, epochs=100, lr=lr)
+        val_probs, val_preds, test_probs, test_preds = test_gnn(model, data)
+        model_val_performance, model_test_performance = eval_gnn(model_name, data.y[data.val_mask].cpu().numpy(), data.y[data.test_mask].cpu().numpy(), val_probs, val_preds, test_probs, test_preds)
+        ## macro f1 score, class 1 f1-score, auc
+        return model_val_performance['macro f1-score'], model_val_performance['class 1 f1-score'], model_val_performance['auc']
+    finally:
+        # 確保不管成功失敗都清理顯存
+        torch.cuda.empty_cache()
+        gc.collect()
 
 def catboost_objective(trial, data, gnns_val_probs):
     """Optuna objective function for CatBoost model optimization"""
@@ -344,7 +365,7 @@ def get_gnn(model_name, data, best_params):
     return model
 
 
-def train_gnn(model, data, epochs=100, lr=0.01):
+def train_gnn(model, data, epochs=100, lr=0.002):
     criterion = FocalLoss(alpha=0.25, gamma=2.0, reduction='mean')
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=5e-4)
     model.train()
@@ -487,7 +508,7 @@ def blending_catboost(data, gnns_val_probs, gnns_test_probs, best_params=None):
 # ==============================================================================
 # Main - Execute complete GNN anomaly detection  
 # ==============================================================================
-def main():
+def main(dataset_name):
     print("=" * 60)
     print("Blockchain Anomaly Detection GNN Framework")
     print("=" * 60)
@@ -500,41 +521,48 @@ def main():
     # ========================================================================
     # 1. Load Elliptic dataset
     # ========================================================================
-    print("\n1. Loading Elliptic dataset...")
-    elliptic_data = load_elliptic_data()
-    elliptic_data = elliptic_data.to(device)
-    print(f"Data loaded: {elliptic_data.x.size(0)} nodes, {elliptic_data.x.size(1)} features, {elliptic_data.edge_index.size(1)} edges")
+    
+    # data = load_elliptic_data()
+    if dataset_name == 'elliptic':
+        data = dataset_zoo.load_elliptic_data()
+    elif dataset_name == 'ethereum':
+        data = dataset_zoo.load_ethereum_data()
+    data = data.to(device)
 
     # ========================================================================
     # 2. Feature Engineering, pagerank, degree, louvain
     # ========================================================================
-    print("\n2. Feature Engineering...")
+    # print("\n2. Feature Engineering...")
     
-    print("PageRank features...")
-    pagerank_features = get_pagerank_features(elliptic_data.edge_index.cpu(), elliptic_data.x.size(0)).to(device)
-    
-    print("Degree features...")
-    degree_features = get_degree_features(elliptic_data.edge_index.cpu(), elliptic_data.x.size(0)).to(device)
-    
-    ## 暫時comment #######################################################
-    print("Louvain features...")
-    louvain_features, partition = get_louvain_features(elliptic_data.edge_index.cpu(), elliptic_data.x.size(0), labels=elliptic_data.y, train_mask=elliptic_data.train_mask)
-    louvain_features = louvain_features.to(device)
+    # cats = [data.x]
+    # if dataset_name == 'elliptic':
+    #     print("PageRank features...")
+    #     pagerank_features = get_pagerank_features(data.edge_index.cpu(), data.x.size(0)).to(device)
+    #     cats.append(pagerank_features)
 
-    print("\nAdding pagerank, degree, louvain features to raw dataset...")
-    elliptic_data.x = torch.cat([elliptic_data.x, pagerank_features, degree_features, louvain_features], dim=1)
-    # elliptic_data.x = torch.cat([elliptic_data.x, pagerank_features, degree_features], dim=1)
-    print(f"Total features: {elliptic_data.x.size(1)} dimensions")
-    
-    # Apply StandardScaler to normalize all features
-    print("\nStandardScaler...")
-    scaler = StandardScaler()
-    x_numpy = elliptic_data.x.cpu().numpy()  # Convert to numpy
-    scaler.fit(x_numpy[elliptic_data.train_mask.cpu().numpy()]) # 記住咗 Train Set 的 Mean 同 Std
+    #     print("Degree features...")
+    #     degree_features = get_degree_features(data.edge_index.cpu(), data.x.size(0)).to(device)
+    #     cats.append(degree_features)
 
-    x_scaled = scaler.transform(x_numpy)  # Fit and transform
-    elliptic_data.x = torch.tensor(x_scaled, dtype=torch.float).to(elliptic_data.x.device)  # Convert back to tensor
-    print(f"StandardScaler done...\nTotal features: {elliptic_data.x.size(1)} dimensions")
+    # print("Louvain features...")
+    # louvain_features, partition = get_louvain_features(data.edge_index.cpu(), data.x.size(0), labels=data.y, train_mask=data.train_mask)
+    # louvain_features = louvain_features.to(device)
+    # cats.append(louvain_features)
+
+    # print("\nAdding pagerank, degree, louvain features to raw dataset...")
+    # data.x = torch.cat(cats, dim=1)
+    # # data.x = torch.cat([data.x, pagerank_features, degree_features], dim=1)
+    # print(f"Total features: {data.x.size(1)} dimensions")
+    
+    # # Apply StandardScaler to normalize all features
+    # print("\nStandardScaler...")
+    # scaler = StandardScaler()
+    # x_numpy = data.x.cpu().numpy()  # Convert to numpy
+    # scaler.fit(x_numpy[data.train_mask.cpu().numpy()]) # 記住咗 Train Set 的 Mean 同 Std
+
+    # x_scaled = scaler.transform(x_numpy)  # Fit and transform
+    # data.x = torch.tensor(x_scaled, dtype=torch.float).to(data.x.device)  # Convert back to tensor
+    # print(f"StandardScaler done...\nTotal features: {data.x.size(1)} dimensions")
     
 
     # ========================================================================
@@ -542,7 +570,7 @@ def main():
     # ========================================================================
      ## 暫時comment #######################################################
     print("\n3. Training Isolation Forest baseline...")
-    baseline_results = isolation_forest_baseline(elliptic_data)
+    baseline_results = isolation_forest_baseline(data)
     
     # ========================================================================
     # 4. Train GNN
@@ -551,23 +579,23 @@ def main():
     # ========================================================================
     # 4.1. TPE - Optuna - done
     # ========================================================================
-    print("\n4.1 TPE - Optuna...")
-    results = {}
+    print("\n4.1 TPE - Optuna GNN models...")
+    tpe_results = {}
     gnn_models_list = inspect.getmembers(GNNs, inspect.isfunction)
     print(type(gnn_models_list))
 
     for model_name, _ in gnn_models_list:
         study = optuna.create_study(directions=['maximize', 'maximize', 'maximize'])
-        study.optimize(lambda trial: gnn_objective(trial, model_name, elliptic_data), n_trials=n_trials)
+        study.optimize(lambda trial: gnn_objective(trial, model_name, data), n_trials=n_trials)
         w_m_f1, w2_f1, w3_auc = 0.4, 0.2, 0.4
         best_trials = max(study.best_trials, key=lambda t: w_m_f1 * t.values[0] + w2_f1 * t.values[1] + w3_auc * t.values[2])
-        results[model_name] = {
+        tpe_results[model_name] = {
             "macro_f1": best_trials.values[0],
             "c1_f1": best_trials.values[1],
             "auc": best_trials.values[2],
             "best_params": best_trials.params,
         }
-        print(model_name, "="*60, "\n", results[model_name])
+        print(model_name, "="*60, "\n", tpe_results[model_name])
 
     # print(f"Best hyperparameters - {model_name}: {study.best_params}")
     # print(f"Best score - auc?: {study.best_value}")
@@ -581,8 +609,8 @@ def main():
     # ]
     # ========================================================================
     print("\n4.2. Training GNNs baseline...")
-    y_val = elliptic_data.y[elliptic_data.val_mask].cpu().numpy()
-    y_test = elliptic_data.y[elliptic_data.test_mask].cpu().numpy()
+    y_val = data.y[data.val_mask].cpu().numpy()
+    y_test = data.y[data.test_mask].cpu().numpy()
     gnns_val_probs, gnns_test_probs = [], []
     models_val_performance, models_test_performance = [], []
 
@@ -592,8 +620,8 @@ def main():
     print('gnn models length:', len(gnn_models_list))
     for model_name, _ in gnn_models_list:
         print(f"\n--- Training {model_name} ---")
-        best_params = results.get(model_name, {}).get("best_params", {})
-        gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds = train_and_test_gnn(model_name, elliptic_data, best_params)
+        best_params = tpe_results.get(model_name, {}).get("best_params", {})
+        gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds = train_and_test_gnn(model_name, data, best_params)
         gnns_val_probs.append(gnn_val_probs.reshape(-1, 1))
         gnns_test_probs.append(gnn_test_probs.reshape(-1, 1))
         model_val_performance, model_test_performance = eval_gnn(model_name, y_val, y_test, gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds)
@@ -615,15 +643,23 @@ def main():
     # ========================================================================
     # 5. training CatBoost
     # 5.1. GA 揀 model
-    # 5.2 TPE - Optuna 優化catboost參數
+    # 5.2  TPE - Optuna 優化catboost參數
     # 5.3. Blending CatBoost
     # ========================================================================
     # 5.1. GA
     # ========================================================================
     # 初始化 GA (11 個模型，所以基因長度是 11)
     print("\n5.1. GA Crossover model...")
+    # 使用 validation set 同 GNN 預測結果作為 GA 的 input，因為 test set 係唔可以用嚟做 model selection
+    X_val_raw = data.x[data.val_mask].cpu().numpy()
+    # 需要 validation set 的 timesteps 來做 GA 的時間切分，避免 data leakage
+    val_ts = data.timesteps[data.val_mask].cpu().numpy()
+
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate, GNN models gnn_val_probs
-    bound_fitness = lambda ga_instance, solution, solution_idx: fitness_func(ga_instance, solution, solution_idx, X_val_meta, elliptic_data, y_val)
+    bound_fitness = lambda ga_instance, solution, solution_idx: fitness_func(
+        ga_instance, solution, solution_idx, 
+        X_val_raw, val_ts, X_val_meta, y_val
+    )
     # partial(fitness_func, X_data=X_val_raw_meta, y_true=y_val)
     print('gnn models length:', len(gnn_models_list))
     ga_instance = pygad.GA(num_generations=50, 
@@ -650,14 +686,14 @@ def main():
     print(f"Using {len(selected_indices)} models selected by GA for final Blending.")
     
     study = optuna.create_study(direction='maximize')
-    study.optimize(lambda trial: catboost_objective(trial, elliptic_data, filtered_val_probs), n_trials=n_trials)
+    study.optimize(lambda trial: catboost_objective(trial, data, filtered_val_probs), n_trials=n_trials)
     cat_best_params = study.best_params
     cat_best_value = study.best_value
     print(f"Best hyperparameters - CatBoost: {cat_best_params}")
     print(f"Best score - auc?: {cat_best_value}")
     
     # study = optuna.create_study(direction='maximize')
-    # study.optimize(lambda trial: catboost_objective(trial, elliptic_data, gnns_val_probs, gnns_test_probs), n_trials=n_trials)
+    # study.optimize(lambda trial: catboost_objective(trial, data, gnns_val_probs, gnns_test_probs), n_trials=n_trials)
     # print(f"Best hyperparameters - CatBoost: {study.best_params}")
     # print(f"Best score - auc?: {study.best_value}")
 
@@ -670,11 +706,14 @@ def main():
     # 另外又有資料比例問題。
     # ========================================================================
     print("\n5.3 Blending CatBoost...")
-    cat_test_preds, cat_test_probs = blending_catboost(elliptic_data, filtered_val_probs, filtered_test_probs, cat_best_params)
-    # cat_test_preds, cat_test_probs = blending_catboost(elliptic_data, gnns_val_probs, gnns_test_probs)
+    cat_test_preds, cat_test_probs = blending_catboost(data, filtered_val_probs, filtered_test_probs, cat_best_params)
+    # cat_test_preds, cat_test_probs = blending_catboost(data, gnns_val_probs, gnns_test_probs)
     eval_blending_catboost(y_test, cat_test_preds, cat_test_probs)
 
     
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Blockchain Anomaly Detection with GNNs')
+    parser.add_argument('dataset', type=str,help='Pleaese select dataset: elliptic or ethereum')
+    args = parser.parse_args()
+    main(args.dataset)
