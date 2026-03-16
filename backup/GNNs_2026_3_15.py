@@ -55,25 +55,25 @@ def GINModel(best_params=None):
 # APPNP 2 layer version 的表現很差，可能是因為 APPNP 的特性使得過多的層數反而會導致over-smoothing問題，從而降低模型的表現。
 # APPNP 2 layer version 的 recall, F1全部是0
 # =================================================================================
-# def APPNPModel(best_params=None):
-#     in_channels = best_params.get('in_channels', None)
-#     hidden_channels = best_params.get('hidden_channels', 64)
-#     out_channels = best_params.get('out_channels', 2)
-#     dropout = best_params.get('dropout', 0.5)
-#     K = best_params.get('K', 10)
-#     alpha = best_params.get('alpha', 0.1)
+def APPNPModel(best_params=None):
+    in_channels = best_params.get('in_channels', None)
+    hidden_channels = best_params.get('hidden_channels', 64)
+    out_channels = best_params.get('out_channels', 2)
+    dropout = best_params.get('dropout', 0.5)
+    K = best_params.get('K', 10)
+    alpha = best_params.get('alpha', 0.1)
 
-#     return Sequential('x, edge_index', [
-#         ##    input layer, input layer ->   hidden layer
-#         (MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout), 'x -> x'),
+    return Sequential('x, edge_index', [
+        ##    input layer, input layer ->   hidden layer
+        (MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout), 'x -> x'),
        
-#         ##    hidden layer,    hidden layer -> output layer
-#         (MLP([hidden_channels, out_channels], norm=None), 'x -> x'),
+        ##    hidden layer,    hidden layer -> output layer
+        (MLP([hidden_channels, out_channels], norm=None), 'x -> x'),
 
-#         # output layer
-#         (APPNP(K=K, alpha=alpha, dropout=dropout), 'x, edge_index -> x'),
-#         (LogSoftmax(dim=1), 'x -> x')
-#     ])
+        # output layer
+        (APPNP(K=K, alpha=alpha, dropout=dropout), 'x, edge_index -> x'),
+        (LogSoftmax(dim=1), 'x -> x')
+    ])
 
 def APPNPModel_1Layer(best_params=None):
     in_channels = best_params.get('in_channels', None)

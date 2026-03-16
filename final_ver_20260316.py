@@ -2,10 +2,18 @@
 ## 0 done. catboosting (做完，但未理解，遲啲再解)
 ## 3 done. FocalLoss
 ## 1. done - GA - done / optuna - done
-## 2. update dataset
+## 2. update dataset - ethereum, 
 ## 4. MixHop power [0, 1, 2, 3], [0, 1, 2, 3, 4]
 ## 5. optimizer = torch.optim.Adam(model.parameters(), lr=lr)?
-## 
+## 6. 圖 (dataset imbalance, model performance)
+##    6.1. Precision 被模型預測為該類別的樣本中，真正屬於該類別的比例。高 Precision 代表模型不亂抓，誤報（False Positive）少。
+##    6.2. Recall 在所有實際屬於該類別的樣本中，被模型正確預測出來的比例。高 Recall 代表模型「不漏抓」，漏報（False Negative）少。
+##    6.3. F1-score Precision 與 Recall 的調和平均數
+##    6.4. Macro 當處理多類別或類別不平衡（Imbalanced Data）時，這些指標能反映模型對所有類別的平均照顧程度。Macro 系列指標對小類別（少數類）非常敏感。即便大類別預測完美，只要小類別表現差，Macro 指標就會大幅下降。這在區塊鏈異常檢測中極其重要。
+##    6.5. Accuracy 全體樣本中預測正確（包含正負樣本）的比例。在數據極度不平衡時（例如 99% 的交易是正常的），即使模型將所有樣本都預測為正常，Accuracy 仍高達 99%，但此時模型毫無偵測能力。
+##    6.6. AUC 模型有多大的機率能正確判斷出「異常那個比正常那個更可疑」1.0：完美模型。0.5：隨機猜測。< 0.5：模型反向預測了（比亂猜還慘）。
+
+
 ## 異常節點的直接鄰居應判斷為高機率異常節點，如果異常節點的直接鄰居沒有直接鄰居是否可被視為必定為異常節點？
 ## blockchain dataset係 direction graph??
 ## generalization 同可解釋性intermitibility係同點？
@@ -21,10 +29,11 @@ from sklearn.model_selection import train_test_split
 import torch
 import torch_scatter
 from torch_geometric.data import Data
-from torch_geometric.utils import degree, get_ppr
 from sklearn.metrics import f1_score, accuracy_score, classification_report, roc_auc_score, recall_score, precision_score, confusion_matrix
-from sklearn.preprocessing import StandardScaler
-from community import community_louvain
+# from torch_geometric.utils import degree, get_ppr
+# from sklearn.preprocessing import StandardScaler
+# from community import community_louvain
+from torch_geometric.loader import NeighborLoader
 
 # model
 from sklearn.ensemble import IsolationForest
@@ -34,14 +43,15 @@ from catboost import CatBoostClassifier
 # Optimization
 import optuna
 from optuna.samplers import TPESampler
+import optuna.visualization as vis
 import pygad
 
 # visualiz
-from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations
+from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations, plot_model_comparison
 
 # GNN Models
 import inspect
-import GNNs
+import gnn_zoo
 import dataset_zoo
 
 ## Focal Loss https://kornia.readthedocs.io/en/latest/losses.html#kornia.losses.focal_loss
@@ -49,143 +59,22 @@ from kornia.losses import FocalLoss
 import argparse
 
 RANDOM_SEED = 24027277
-n_trials=30
+w_m_f1, w_c1_f1, w_auc = 0.2, 0.4, 0.4
+n_trials=20
 
 # ==============================================================================
-# 1. Data loading
-# ==============================================================================
-# def load_elliptic_data(dataset_dir='Dataset'):
-
-#     # 1. load data
-#     classes_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_classes.csv'))
-#     edgelist_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv'))
-#     features_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_features.csv'), header=None)
-
-#     # 2. colA is id, colB is time steps
-#     features_df.columns = ['txId', 'timestep'] + [f'feat_{i}' for i in range(2, features_df.shape[1])]
-    
-#     # 3. labelled class 2 (licit), labelled class 1 (illicit), unknown -> -1
-#     nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
-#     y = torch.tensor(nodes_df['class'].map({'2': 0, '1': 1}).fillna(-1).values, dtype=torch.long)
-    
-#     # 4. 提取特徵 
-#     x = torch.tensor(nodes_df.iloc[:, 1:-1].values, dtype=torch.float)
-
-#     # 5. 高效處理邊表 (取代 iterrows)
-#     tx_id_map = {tx_id: i for i, tx_id in enumerate(nodes_df['txId'])}
-    
-#     # 使用 map 進行向量化轉換，速度提升顯著
-#     edge_index_src = edgelist_df.iloc[:, 0].map(tx_id_map)
-#     edge_index_tgt = edgelist_df.iloc[:, 1].map(tx_id_map)
-    
-#     # 移除不在 map 中的無效邊 (dropna)
-#     edges = pd.concat([edge_index_src, edge_index_tgt], axis=1).dropna().astype(int)
-#     edge_index = torch.tensor(edges.values.T, dtype=torch.long)
-
-#     # 6. 構建數據集與 Mask
-#     data = Data(x=x, y=y, edge_index=edge_index)
-#     data.timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
-
-#     known_mask = (y != -1)
-#     data.train_mask = (data.timesteps < 35) & known_mask
-#     data.val_mask   = (data.timesteps >= 35) & (data.timesteps < 42) & known_mask
-#     data.test_mask  = (data.timesteps >= 42) & known_mask
-
-#     print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
-
-#     return data
-
-
-# ==============================================================================
-# 2. Feature Engineering
-# ==============================================================================
-
-# def get_pagerank_features(edge_index, num_nodes, alpha=0.15):
-#     ppr_edge_index, ppr_weights = get_ppr(edge_index=edge_index, alpha=alpha, num_nodes=num_nodes)
-#     return torch_scatter.scatter_add(ppr_weights, ppr_edge_index[1], dim=0, dim_size=num_nodes).reshape(-1, 1)
-
-
-# def get_degree_features(edge_index, num_nodes):
-#     # Calculate in/out degree
-#     out_deg = degree(edge_index[0], num_nodes)
-#     in_deg = degree(edge_index[1], num_nodes)
-    
-#     # Total degree and ratio
-#     total_deg = in_deg + out_deg
-#     in_out_ratio = in_deg / (out_deg + 1e-8)
-    
-#     # Log normalization (handle power law)
-#     in_deg_log = torch.log1p(in_deg)
-#     out_deg_log = torch.log1p(out_deg)
-#     total_deg_log = torch.log1p(total_deg)
-    
-#     # Ranking feature
-#     total_deg_rank = torch.argsort(torch.argsort(total_deg, descending=True)).float() / num_nodes
-
-#     return torch.stack([
-#         in_deg, out_deg, in_deg_log, out_deg_log, total_deg_log, in_out_ratio, total_deg_rank
-#     ], dim=1)
-
-
-# def get_louvain_features(edge_index, num_nodes, labels=None, train_mask=None, resolution=1.0):
-#     # Build graph using NetworkX (undirected)
-#     G = nx.Graph()
-#     edges = edge_index.t().cpu().numpy()
-#     G.add_edges_from(edges)
-    
-#     # Run Louvain community detection
-#     partition = community_louvain.best_partition(G, resolution=resolution, random_state=RANDOM_SEED)
-    
-#     # Get community IDs for all nodes
-#     comm_ids = np.array([partition.get(i, -1) for i in range(num_nodes)])
-    
-#     # Compute community statistics
-#     comm_size = {}
-#     comm_train_illicit = {}
-#     comm_train_total = {}
-    
-#     labels_np = labels.cpu().numpy() if labels is not None else np.zeros(num_nodes)
-#     train_mask_np = train_mask.cpu().numpy() if train_mask is not None else np.ones(num_nodes, dtype=bool)
-    
-#     # Calculate community stats (only on train set to prevent leakage)
-#     for i in range(num_nodes):
-#         cid = comm_ids[i]
-#         if cid == -1:
-#             continue
-        
-#         comm_size[cid] = comm_size.get(cid, 0) + 1
-        
-#         if train_mask_np[i]:
-#             if labels_np[i] == 1:  # Illicit
-#                 comm_train_illicit[cid] = comm_train_illicit.get(cid, 0) + 1
-#             comm_train_total[cid] = comm_train_total.get(cid, 0) + 1
-    
-#     # Calculate internal degree (edges within same community)
-#     row, col = edge_index
-#     same_comm_mask = (torch.from_numpy(comm_ids[row]) == torch.from_numpy(comm_ids[col]))
-#     internal_edge_index = edge_index[:, same_comm_mask]
-#     internal_deg = degree(internal_edge_index[0], num_nodes)
-#     total_deg = degree(edge_index[0], num_nodes)
-    
-#     # Combine features
-#     louvain_feat = torch.zeros((num_nodes, 5))
-    
-#     for i in range(num_nodes):
-#         cid = comm_ids[i]
-#         if cid == -1:
-#             continue
-        
-#         size = comm_size.get(cid, 1)
-#         illicit_cnt = comm_train_illicit.get(cid, 0)
-#         train_total = comm_train_total.get(cid, 1e-8)
-        
-#         louvain_feat[i, 0] = np.log1p(size)                    # Community size (log)
-#         louvain_feat[i, 1] = illicit_cnt / train_total          # Illicit ratio
-#         louvain_feat[i, 2] = 1.0 if illicit_cnt > 0 else 0.0   # Has illicit flag
-#         louvain_feat[i, 3] = internal_deg[i] / (total_deg[i] + 1e-8)  # Internal degree ratio
-#         louvain_feat[i, 4] = internal_deg[i] / (size)          # Average internal degree
-    
-#     return louvain_feat, partition
+# NeighborLoader for mini-batch training
+# =============================================================================
+def get_train_loader(data, batch_size=2048, num_neighbors=[15, 10]):
+    return NeighborLoader(
+        data,
+        num_neighbors=[15, 10], # 採樣層數需對應模型層數
+        batch_size=batch_size,
+        input_nodes=data.train_mask,
+        num_workers=1,
+        persistent_workers=True, # 保持進程不被銷毀，節省重啟開銷
+        shuffle=True
+    )
 
 
 # ==============================================================================
@@ -197,11 +86,11 @@ n_trials=30
 def fitness_func(ga_instance, solution, solution_idx, 
                  X_val_raw, val_ts, X_val_meta, y_val):
     # solution 是 GA 產生的 [1, 0, 1...] 陣列
-    selected_cols = [i for i, bit in enumerate(solution) if bit == 1]
-    print('selected_cols 1:', selected_cols)
+    # selected_cols = [i for i, bit in enumerate(solution) if bit == 1]
+    # print('selected_cols 1:', selected_cols)
 
-    selected_cols2 = np.where(solution == 1)[0]
-    print('selected_cols2:', selected_cols2)
+    selected_cols = np.where(solution == 1)[0]
+    # print('selected_cols2:', selected_cols2)
 
     if len(selected_cols) == 0: return 0
     
@@ -232,7 +121,8 @@ def fitness_func(ga_instance, solution, solution_idx,
     c1_f1 = f1_score(y_ga_val, preds)
     macro_f1 = f1_score(y_ga_val, preds, average='macro')
     auc = roc_auc_score(y_ga_val, probs)
-    weight_score = (0.4 * c1_f1) + (0.2 * macro_f1) + (0.4 * auc)
+    # w_m_f1, w_c1_f1, w_auc = 0.2, 0.4, 0.4
+    weight_score = (w_c1_f1 * c1_f1) + (w_m_f1 * macro_f1) + (w_auc * auc)
     return weight_score
 
 
@@ -245,26 +135,33 @@ def gnn_objective(trial, model_name, data):
     try:
         # Define search space
         in_channels = data.x.size(1)
-        hidden_channels = trial.suggest_categorical('hidden_channels', [32, 64]) #, 128, 256
-        num_layers = trial.suggest_categorical('num_layers', [2, 3]) #, 4
+        hidden_channels = trial.suggest_categorical('hidden_channels', [32, 64, 128, 256]) #
+        # num_layers = trial.suggest_categorical('num_layers', [2, 3, 4]) #
         out_channels = 2
         dropout = trial.suggest_float('dropout', 0.1, 0.5, log=False)
         heads = trial.suggest_categorical('heads', [4, 8])
         lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
         
         # Create model
-        best_params = {
+        gnn_best_params = {
             'in_channels': in_channels,
             'hidden_channels': hidden_channels,
-            'num_layers': num_layers,
+            # 'num_layers': num_layers,
             'out_channels': out_channels,
             'dropout': dropout,
             'heads': heads,
-            'lr': lr,
         }
-        model = get_gnn(model_name, data, best_params)
-        model = train_gnn(model, data, epochs=100, lr=lr)
-        val_probs, val_preds, test_probs, test_preds = test_gnn(model, data)
+        # new GNN model
+        model = get_gnn(model_name, data, gnn_best_params)
+
+        # training model --------------
+        # define search space for training, testing parameters
+        loader = get_train_loader(data, batch_size=2048)
+        focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.8, 0.9])
+        threshold = trial.suggest_float('threshold', 0.1, 0.5, log=False)
+        # training and testing and evaluate
+        model = train_gnn_minibatch(model, loader, data, epochs=100, lr=lr, alpha=focalloss_alpha)
+        val_probs, val_preds, test_probs, test_preds = test_gnn(model, data, threshold=threshold)
         model_val_performance, model_test_performance = eval_gnn(model_name, data.y[data.val_mask].cpu().numpy(), data.y[data.test_mask].cpu().numpy(), val_probs, val_preds, test_probs, test_preds)
         ## macro f1 score, class 1 f1-score, auc
         return model_val_performance['macro f1-score'], model_val_performance['class 1 f1-score'], model_val_performance['auc']
@@ -360,25 +257,41 @@ def get_gnn(model_name, data, best_params):
     best_params['in_channels'] = data.x.size(1)
     best_params['out_channels'] = 2
     # Initialize GNN model
-    model_func = getattr(GNNs, model_name, None)
+    model_func = getattr(gnn_zoo, model_name, None)
     model = model_func(best_params).to(device)
     return model
 
 
-def train_gnn(model, data, epochs=100, lr=0.002):
-    criterion = FocalLoss(alpha=0.25, gamma=2.0, reduction='mean')
+# def train_gnn(model, data, epochs=100, lr=0.002, alpha=0.875):
+#     criterion = FocalLoss(alpha=alpha, gamma=2.0, reduction='mean')
+#     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=5e-4)
+#     model.train()
+#     for _ in range(epochs):
+#         optimizer.zero_grad()
+#         out = model(data.x, data.edge_index)
+#         loss = criterion(out[data.train_mask], data.y[data.train_mask])
+#         loss.backward()
+#         optimizer.step()
+#     return model
+
+
+def train_gnn_minibatch(model, loader, data, epochs=100, lr=0.002, alpha=0.875):
+    criterion = FocalLoss(alpha=alpha, gamma=2.0, reduction='mean')
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=5e-4)
     model.train()
     for _ in range(epochs):
-        optimizer.zero_grad()
-        out = model(data.x, data.edge_index)
-        loss = criterion(out[data.train_mask], data.y[data.train_mask])
-        loss.backward()
-        optimizer.step()
+        total_loss = 0
+        for batch in loader:
+            batch = batch.to(data.x.device)
+            optimizer.zero_grad()
+            out = model(batch.x, batch.edge_index)
+            loss = criterion(out[batch.train_mask], batch.y[batch.train_mask])
+            total_loss += loss.item()
+            loss.backward()
+            optimizer.step()
     return model
 
-
-def test_gnn(model, data, threshold=0.5): 
+def test_gnn(model, data, threshold=0.25): 
     model.eval()
     with torch.no_grad():
         out = model(data.x, data.edge_index)
@@ -400,7 +313,7 @@ def eval_gnn(model_name, y_val, y_test, val_probs, val_preds, test_probs, test_p
     val_auc = roc_auc_score(y_val, val_probs)
     # print(f"Validate AUC: {auc:.4f}")
     model_val_performance = {
-        'model': model_name,
+        'model': model_name.rsplit('_', 1)[0],
         'class 1 precision': val_report['1']['precision'],
         'class 1 recall': val_report['1']['recall'],
         'class 1 f1-score': val_report['1']['f1-score'],
@@ -420,7 +333,7 @@ def eval_gnn(model_name, y_val, y_test, val_probs, val_preds, test_probs, test_p
     test_auc = roc_auc_score(y_test, test_probs)
     # print(f"Test AUC: {auc:.4f}")
     model_test_performance = {
-        'model': model_name,
+        'model': model_name.rsplit('_', 1)[0],
         'class 1 precision': test_report['1']['precision'],
         'class 1 recall': test_report['1']['recall'],
         'class 1 f1-score': test_report['1']['f1-score'],
@@ -448,10 +361,13 @@ def train_and_test_gnn(model_name, data, best_params=None):
     # heads = best_params.get('heads', 8)
     epochs = best_params.get('epochs', 100)
     lr = best_params.get('lr', 0.01)
+    focalloss_alpha = best_params.get('focalloss_alpha', 0.875)
+    threshold = best_params.get('threshold', 0.5)
+    gnn_train_loader = get_train_loader(data, batch_size=2048)
     # {'hidden_channels': 32, 'num_layers': 4, 'dropout': 0.4062143730734663, 'heads': 4, 'lr': 0.0002074068439961685}.
     model = get_gnn(model_name, data, best_params)
-    model = train_gnn(model, data, epochs, lr)
-    return test_gnn(model, data)
+    model = train_gnn_minibatch(model, gnn_train_loader, data, epochs, lr, focalloss_alpha)
+    return test_gnn(model, data, threshold)
      
 
 # ==============================================================================
@@ -460,11 +376,23 @@ def train_and_test_gnn(model_name, data, best_params=None):
 
 def eval_blending_catboost(y_test, test_preds, test_probs):
      ## preformance metrics
-    metrics = classification_report(y_test, test_preds, zero_division=0)
-    auc = roc_auc_score(y_test, test_probs)
-    print(metrics)
-    print(f"Final CatBoost AUC: {auc:.4f}")
-    return auc
+    test_report = classification_report(y_test, test_preds, zero_division=0, output_dict=True)
+    test_auc = roc_auc_score(y_test, test_probs)
+    model_test_performance = {
+        'model': 'Catboosting',
+        'class 1 precision': test_report['1']['precision'],
+        'class 1 recall': test_report['1']['recall'],
+        'class 1 f1-score': test_report['1']['f1-score'],
+        'class 0 precision': test_report['0']['precision'],
+        'class 0 recall': test_report['0']['recall'],
+        'class 0 f1-score': test_report['0']['f1-score'],
+        'macro precision': test_report['macro avg']['precision'],
+        'macro recall': test_report['macro avg']['recall'],
+        'macro f1-score': test_report['macro avg']['f1-score'],
+        'accuracy': test_report['accuracy'],
+        'auc': test_auc,
+    }
+    return model_test_performance
 
 
 def blending_catboost(data, gnns_val_probs, gnns_test_probs, best_params=None):
@@ -530,42 +458,6 @@ def main(dataset_name):
     data = data.to(device)
 
     # ========================================================================
-    # 2. Feature Engineering, pagerank, degree, louvain
-    # ========================================================================
-    # print("\n2. Feature Engineering...")
-    
-    # cats = [data.x]
-    # if dataset_name == 'elliptic':
-    #     print("PageRank features...")
-    #     pagerank_features = get_pagerank_features(data.edge_index.cpu(), data.x.size(0)).to(device)
-    #     cats.append(pagerank_features)
-
-    #     print("Degree features...")
-    #     degree_features = get_degree_features(data.edge_index.cpu(), data.x.size(0)).to(device)
-    #     cats.append(degree_features)
-
-    # print("Louvain features...")
-    # louvain_features, partition = get_louvain_features(data.edge_index.cpu(), data.x.size(0), labels=data.y, train_mask=data.train_mask)
-    # louvain_features = louvain_features.to(device)
-    # cats.append(louvain_features)
-
-    # print("\nAdding pagerank, degree, louvain features to raw dataset...")
-    # data.x = torch.cat(cats, dim=1)
-    # # data.x = torch.cat([data.x, pagerank_features, degree_features], dim=1)
-    # print(f"Total features: {data.x.size(1)} dimensions")
-    
-    # # Apply StandardScaler to normalize all features
-    # print("\nStandardScaler...")
-    # scaler = StandardScaler()
-    # x_numpy = data.x.cpu().numpy()  # Convert to numpy
-    # scaler.fit(x_numpy[data.train_mask.cpu().numpy()]) # 記住咗 Train Set 的 Mean 同 Std
-
-    # x_scaled = scaler.transform(x_numpy)  # Fit and transform
-    # data.x = torch.tensor(x_scaled, dtype=torch.float).to(data.x.device)  # Convert back to tensor
-    # print(f"StandardScaler done...\nTotal features: {data.x.size(1)} dimensions")
-    
-
-    # ========================================================================
     # 3. Train Isolation Forest baseline - done - 暫時comment for train GNN model
     # ========================================================================
      ## 暫時comment #######################################################
@@ -581,14 +473,14 @@ def main(dataset_name):
     # ========================================================================
     print("\n4.1 TPE - Optuna GNN models...")
     tpe_results = {}
-    gnn_models_list = inspect.getmembers(GNNs, inspect.isfunction)
-    print(type(gnn_models_list))
+    gnn_models_list = inspect.getmembers(gnn_zoo, inspect.isfunction)
+    # print(type(gnn_models_list))
 
     for model_name, _ in gnn_models_list:
         study = optuna.create_study(directions=['maximize', 'maximize', 'maximize'])
         study.optimize(lambda trial: gnn_objective(trial, model_name, data), n_trials=n_trials)
-        w_m_f1, w2_f1, w3_auc = 0.4, 0.2, 0.4
-        best_trials = max(study.best_trials, key=lambda t: w_m_f1 * t.values[0] + w2_f1 * t.values[1] + w3_auc * t.values[2])
+        
+        best_trials = max(study.best_trials, key=lambda t: w_m_f1 * t.values[0] + w_c1_f1 * t.values[1] + w_auc * t.values[2])
         tpe_results[model_name] = {
             "macro_f1": best_trials.values[0],
             "c1_f1": best_trials.values[1],
@@ -615,7 +507,7 @@ def main(dataset_name):
     models_val_performance, models_test_performance = [], []
 
     ## get GNN ZOO all model
-    gnn_models_list = inspect.getmembers(GNNs, inspect.isfunction)
+    gnn_models_list = inspect.getmembers(gnn_zoo, inspect.isfunction)
     # gnn_models_list.extend([('GCN', 0), ('GAT', 0), ('GraphSAGE', 0), ('GIN', 0)])
     print('gnn models length:', len(gnn_models_list))
     for model_name, _ in gnn_models_list:
@@ -637,8 +529,7 @@ def main(dataset_name):
     # pd.set_option('display.precision', 4)
     df_val_results = pd.DataFrame(models_val_performance)
     df_test_results = pd.DataFrame(models_test_performance)
-    print("\n", df_val_results, "\n", "="*60, "\n", df_test_results)
-
+    print("\nValidation Performance", df_val_results, "\n", "="*60, "\ntesting Performance", df_test_results)
 
     # ========================================================================
     # 5. training CatBoost
@@ -708,7 +599,17 @@ def main(dataset_name):
     print("\n5.3 Blending CatBoost...")
     cat_test_preds, cat_test_probs = blending_catboost(data, filtered_val_probs, filtered_test_probs, cat_best_params)
     # cat_test_preds, cat_test_probs = blending_catboost(data, gnns_val_probs, gnns_test_probs)
-    eval_blending_catboost(y_test, cat_test_preds, cat_test_probs)
+    cat_test_performance = eval_blending_catboost(y_test, cat_test_preds, cat_test_probs)
+    models_test_performance.append(cat_test_performance)
+    final_df_test_results = pd.concat([df_test_results, cat_test_performance], ignore_index=True)
+    print("\n", "="*60, "\ntesting Performance", final_df_test_results)
+
+
+    # ========================================================================
+    # 6. Chart
+    # ========================================================================
+    plot_model_comparison(final_df_test_results)
+    #  
 
     
 

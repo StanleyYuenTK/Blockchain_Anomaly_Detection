@@ -114,7 +114,7 @@ def get_standard_scaler(data):
 # Elliptic dataset
 # =========================================================================================
 def process_elliptic_data(dataset_dir='Dataset/elliptic dataset'):
-    print("\n1. Loading Elliptic dataset...")
+    print("\n1. Processing Elliptic dataset...")
 
     # 1. load data -------------------------------
     classes_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_classes.csv'))
@@ -135,26 +135,26 @@ def process_elliptic_data(dataset_dir='Dataset/elliptic dataset'):
     # get x without txId, timestep and target(class), 
     # since my model not need time to learn, so we drop them
     x = torch.tensor(nodes_df.iloc[:, 2:-1].values, dtype=torch.float)
-    print(y)
-    print(x)
-    print(f"Feature shape: {x.shape}, Label shape: {y.shape}")
-    print(nodes_df.head())
+    # print(y)
+    # print(x)
+    # print(f"Feature shape: {x.shape}, Label shape: {y.shape}")
+    # print(nodes_df.head())
 
     tx_id_map = {tx_id: i for i, tx_id in enumerate(nodes_df['txId'])}
     edge_index_src = edgelist_df.iloc[:, 0].map(tx_id_map)
     edge_index_tgt = edgelist_df.iloc[:, 1].map(tx_id_map)
     edges = pd.concat([edge_index_src, edge_index_tgt], axis=1).astype(int)
     edge_index = torch.tensor(edges.values.T, dtype=torch.long)
-    print('edge_index_src', edge_index_src.shape)
-    print('edge_index_tgt', edge_index_tgt.shape)
+    # print('edge_index_src', edge_index_src.shape)
+    # print('edge_index_tgt', edge_index_tgt.shape)
     
-    print('edge_index_src nulls:', edge_index_src.isnull().sum().sum())
-    print('edge_index_tgt nulls:', edge_index_tgt.isnull().sum().sum())
-    print('edges nulls:', edges.isnull().sum().sum())
+    # print('edge_index_src nulls:', edge_index_src.isnull().sum().sum())
+    # print('edge_index_tgt nulls:', edge_index_tgt.isnull().sum().sum())
+    # print('edges nulls:', edges.isnull().sum().sum())
 
-    print('\nedges:', edges)
-    print(f"Edge index shape:\n {edge_index.shape}")
-    print(f"Edge index:\n {edge_index}")
+    # print('\nedges:', edges)
+    # print(f"Edge index shape:\n {edge_index.shape}")
+    # print(f"Edge index:\n {edge_index}")
 
     # 6. New Data and create Mask -------------------------------
     data = Data(x=x, y=y, edge_index=edge_index)
@@ -162,23 +162,20 @@ def process_elliptic_data(dataset_dir='Dataset/elliptic dataset'):
     data.train_mask = (data.timesteps < 35) & (y != -1)
     data.val_mask   = (data.timesteps >= 35) & (data.timesteps < 42) & (y != -1)
     data.test_mask  = (data.timesteps >= 42) & (y != -1)
-    print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
+    # print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
 
     # 7. feature engineering - pagerank, degree, louvain -------------------------------
-    cats = []
     print("PageRank features...")
     pagerank_features = get_pagerank_features(data.edge_index, data.x.size(0))
-    cats.append(pagerank_features)
 
     print("Degree features...")
     degree_features = get_degree_features(data.edge_index, data.x.size(0))
-    cats.append(degree_features)
 
     print("Louvain features...")
     louvain_features, partition = get_louvain_features(data.edge_index, data.x.size(0), labels=data.y, train_mask=data.train_mask)
-    cats.append(louvain_features)
 
-    data.x = torch.cat([data.x, cats], dim=1)
+    print("combine features to data.x...")
+    data.x = torch.cat([data.x, pagerank_features, degree_features, louvain_features], dim=1)
     print(f"Total features: {data.x.size(1)} dimensions")
 
     # 7. StandardScaler ----------------------------------------------------
@@ -380,5 +377,5 @@ def load_ethereum_data(fname='Dataset/ethereum dataset/ethereum_processed_data.p
     
     return data
 
-process_ethereum_data()
+# process_ethereum_data()
 process_elliptic_data()

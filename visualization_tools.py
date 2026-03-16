@@ -10,7 +10,7 @@ import numpy as np
 import seaborn as sns
 import os
 import json
-
+from datetime import datetime
 # PyTorch support removed - torch functionality not used in current implementation
 
 # Set font for better display
@@ -20,6 +20,75 @@ plt.rcParams['axes.unicode_minus'] = False
 # Set style
 sns.set_style("whitegrid")
 sns.set_palette("husl")
+
+
+def plot_model_comparison(df):
+    
+
+    metrics_to_plot = [
+        'class 1 precision',
+        'class 1 recall',
+        'class 1 f1-score',
+        'class 0 precision',
+        'class 0 recall',
+        'class 0 f1-score',
+        'macro precision',
+        'macro recall',
+        'macro f1-score',
+        'accuracy',
+        'auc',
+    ]
+
+    for metric in metrics_to_plot:
+        if metric not in df.columns:
+            continue
+            
+        plt.figure(figsize=(12, 6))
+        
+        # 根據當前指標進行降序排列，這在學術圖表中是標準做法
+        df_sorted = df.sort_values(metric, ascending=False)
+        
+        # 繪製柱狀圖
+        ax = sns.barplot(x='model', y=metric, data=df_sorted, palette='magma')
+        
+        # 在柱狀圖上方顯示數值 (標籤化)
+        for p in ax.patches:
+            ax.annotate(format(p.get_height(), '.3f'), 
+                        (p.get_x() + p.get_width() / 2., p.get_height()), 
+                        ha = 'center', va = 'center', 
+                        xytext = (0, 9), 
+                        textcoords = 'offset points')
+
+        plt.xticks(rotation=45, ha='right')
+        plt.title(f'GNN Models Comparison: {metric.upper()}')
+        plt.ylabel(metric.capitalize())
+        plt.xlabel('Model Name')
+        plt.ylim(0, 1.1) # 數值通常在 0-1 之間，留出一點頂部空間給標籤
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.tight_layout()
+        
+        # 自動存檔，檔名動態生成
+        current_time = datetime.now().strftime("%m%d_%H%M")
+        file_name = f"comparison_{metric.replace(' ', '_')}_{current_time}.png"
+        plt.savefig(file_name, dpi=300)
+        plt.close() # 關閉畫布，避免在循環中佔用過多記憶體
+        
+        print(f"已生成圖表: {file_name}")
+
+
+    plt.figure(figsize=(12, 6))
+    # 以 Macro F1-score 排序，這樣一眼就能看出誰最強
+    df_sorted = df.sort_values('macro f1-score', ascending=False)
+    
+    sns.barplot(x='model', y='macro f1-score', data=df_sorted, palette='viridis')
+    plt.xticks(rotation=45, ha='right')
+    plt.title('GNN Models Performance Comparison (Macro F1)')
+    plt.ylabel('Macro F1-score')
+    plt.tight_layout()
+    plt.savefig('model_comparison.png')
+    plt.show()
+
+
 
 
 class TrainingHistory:

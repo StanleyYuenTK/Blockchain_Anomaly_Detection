@@ -47,7 +47,7 @@ from visualization_tools import TrainingHistory, generate_standard_gnn_visualiza
 
 # GNN Models
 import inspect
-import GNNs
+import gnn_zoo
 
 ## Focal Loss https://kornia.readthedocs.io/en/latest/losses.html#kornia.losses.focal_loss
 from kornia.losses import FocalLoss
@@ -266,7 +266,7 @@ def get_gnn(model_name, data, in_channels, hidden_channels, num_layers, out_chan
     elif model_name == 'GIN':
         model = GIN(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm').to(device)
     else:
-        model_func = getattr(GNNs, model_name, None)
+        model_func = getattr(gnn_zoo, model_name, None)
         model = model_func(in_channels, hidden_channels, out_channels).to(device)
     return model
 
@@ -445,7 +445,7 @@ def main():
     y_test = elliptic_data.y[elliptic_data.test_mask].cpu().numpy()
     
     ## get GNN ZOO all model
-    gnn_models_list = inspect.getmembers(GNNs, inspect.isfunction)
+    gnn_models_list = inspect.getmembers(gnn_zoo, inspect.isfunction)
     gnns_val_probs, gnns_test_probs = [], []
     for model_name, _ in gnn_models_list:
         print(f"\n--- Training {model_name} ---")

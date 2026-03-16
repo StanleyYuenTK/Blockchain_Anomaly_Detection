@@ -44,10 +44,10 @@ import pygad
 
 # visualiz
 from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations
-from GNNs import (APPNPModel, PureChebNetModel, LinearChebNetModel, MixHopGCNModel, MixHopGCNModel_1dropout,
+from gnn_zoo import (APPNPModel, PureChebNetModel, LinearChebNetModel, MixHopGCNModel, MixHopGCNModel_1dropout,
                   MixHopGATModel, MixHopGraphSAGEModel, MixHopGINModel, MixHopGINModel_noBRD )
 import inspect
-import GNNs
+import gnn_zoo
 
 RANDOM_SEED = 24027277
 # list
@@ -361,7 +361,7 @@ def gnn_train_and_test(model_name, data,
     elif model_name == 'GIN':
         model = GIN(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm').to(data.x.device)
     else:
-        model_func = getattr(GNNs, model_name, None)
+        model_func = getattr(gnn_zoo, model_name, None)
         model = model_func(in_channels, hidden_channels, out_channels).to(data.x.device)
         # print(list(model.named_parameters()))
     
@@ -625,7 +625,7 @@ def main():
     # final_mask = None
 
     ## get GNN ZOO all model
-    gnn_models_list = inspect.getmembers(GNNs, inspect.isfunction)
+    gnn_models_list = inspect.getmembers(gnn_zoo, inspect.isfunction)
 
     oof_preds = np.zeros(len(elliptic_data.X))
     test_preds = np.zeros(len(elliptic_data.test_mask))
