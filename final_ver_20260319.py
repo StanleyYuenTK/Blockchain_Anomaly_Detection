@@ -33,7 +33,8 @@ from sklearn.metrics import f1_score, accuracy_score, classification_report, roc
 # from torch_geometric.utils import degree, get_ppr
 # from sklearn.preprocessing import StandardScaler
 # from community import community_louvain
-from torch_geometric.loader import NeighborLoader
+# from torch_geometric.loader import NeighborLoader
+from torch_geometric.loader import NeighborLoader, ImbalancedSampler
 
 # model
 from sklearn.ensemble import IsolationForest
@@ -45,6 +46,7 @@ import optuna
 from optuna.samplers import TPESampler
 import optuna.visualization as vis
 import pygad
+import json
 
 # visualiz
 from visualization_tools import TrainingHistory, generate_standard_gnn_visualizations, plot_model_comparison
@@ -65,17 +67,18 @@ n_trials=20
 # ==============================================================================
 # NeighborLoader for mini-batch training
 # =============================================================================
-def get_train_loader(data, batch_size=2048, num_neighbors=[15, 10]):
+def get_train_loader(data, batch_size=512, num_neighbors=[25, 10]):
+    sampler = ImbalancedSampler(data, input_nodes=data.train_mask)
     return NeighborLoader(
         data,
-        num_neighbors=[15, 10], # 採樣層數需對應模型層數
+        num_neighbors=num_neighbors, # 採樣層數需對應模型層數
         batch_size=batch_size,
         input_nodes=data.train_mask,
-        num_workers=1,
+        sampler=sampler,
+        num_workers=8,
+        pin_memory=True,
         persistent_workers=True, # 保持進程不被銷毀，節省重啟開銷
-        shuffle=True
     )
-
 
 # ==============================================================================
 # Genetic Algorithm
@@ -130,51 +133,11 @@ def fitness_func(ga_instance, solution, solution_idx,
 # TPE - Optuna
 # ==============================================================================
 
-def gnn_objective(trial, model_name, data):
-    """Optuna objective function for GNN model optimization"""
-    try:
-        # Define search space
-        in_channels = data.x.size(1)
-        hidden_channels = trial.suggest_categorical('hidden_channels', [32, 64, 128, 256]) #
-        # num_layers = trial.suggest_categorical('num_layers', [2, 3, 4]) #
-        out_channels = 2
-        dropout = trial.suggest_float('dropout', 0.1, 0.5, log=False)
-        heads = trial.suggest_categorical('heads', [4, 8])
-        lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
-        
-        # Create model
-        gnn_best_params = {
-            'in_channels': in_channels,
-            'hidden_channels': hidden_channels,
-            # 'num_layers': num_layers,
-            'out_channels': out_channels,
-            'dropout': dropout,
-            'heads': heads,
-        }
-        # new GNN model
-        model = get_gnn(model_name, data, gnn_best_params)
-
-        # training model --------------
-        # define search space for training, testing parameters
-        loader = get_train_loader(data, batch_size=2048)
-        focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.8, 0.9])
-        threshold = trial.suggest_float('threshold', 0.1, 0.5, log=False)
-        # training and testing and evaluate
-        model = train_gnn_minibatch(model, loader, data, epochs=100, lr=lr, alpha=focalloss_alpha)
-        val_probs, val_preds, test_probs, test_preds = test_gnn(model, data, threshold=threshold)
-        model_val_performance, model_test_performance = eval_gnn(model_name, data.y[data.val_mask].cpu().numpy(), data.y[data.test_mask].cpu().numpy(), val_probs, val_preds, test_probs, test_preds)
-        ## macro f1 score, class 1 f1-score, auc
-        return model_val_performance['macro f1-score'], model_val_performance['class 1 f1-score'], model_val_performance['auc']
-    finally:
-        # 確保不管成功失敗都清理顯存
-        torch.cuda.empty_cache()
-        gc.collect()
-
 def catboost_objective(trial, data, gnns_val_probs):
     """Optuna objective function for CatBoost model optimization"""
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate
-    X_val_raw_meta = np.hstack([data.x[data.val_mask].cpu().numpy(), X_val_meta])
-    y_val = data.y[data.val_mask].cpu().numpy()
+    X_val_raw_meta = np.hstack([data.x[data.val_mask].numpy(), X_val_meta])
+    y_val = data.y[data.val_mask].numpy()
     print(f"X_val_meta shape: {X_val_meta.shape}")
     print(f"X_val_final shape: {X_val_raw_meta.shape}")
     X_tr, X_ev, y_tr, y_ev = train_test_split(X_val_raw_meta, y_val, test_size=0.25, random_state=RANDOM_SEED)
@@ -203,9 +166,8 @@ def catboost_objective(trial, data, gnns_val_probs):
 
     test_preds = cat.predict(X_ev)
     test_probs = cat.predict_proba(X_ev)[:, 1]
-    auc = eval_blending_catboost(y_ev, test_preds, test_probs)
-    return auc
-
+    model_test_performance = eval_blending_catboost(y_ev, test_preds, test_probs)
+    return model_test_performance['macro f1-score'], model_test_performance['class 1 f1-score'], model_test_performance['auc']
 
 # ==============================================================================
 # Models - GNN Models, Isolation Forest Baseline
@@ -214,9 +176,9 @@ def catboost_objective(trial, data, gnns_val_probs):
 # Isolation Forest Baseline
 def isolation_forest_baseline(data):
     ## isolation forest baseline skip validation set
-    X_train = data.x[data.train_mask | data.val_mask].cpu().numpy()
-    X_test = data.x[data.test_mask].cpu().numpy()
-    y_test = data.y[data.test_mask].cpu().numpy()
+    X_train = data.x[data.train_mask | data.val_mask].numpy()
+    X_test = data.x[data.test_mask].numpy()
+    y_test = data.y[data.test_mask].numpy()
 
     # Train Isolation Forest
     clf = IsolationForest(random_state=24027277, contamination=0.05)
@@ -291,17 +253,38 @@ def train_gnn_minibatch(model, loader, data, epochs=100, lr=0.002, alpha=0.875):
             optimizer.step()
     return model
 
-def test_gnn(model, data, threshold=0.25): 
-    model.eval()
-    with torch.no_grad():
-        out = model(data.x, data.edge_index)
-        probs = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
-       
-        val_probs = probs[data.val_mask.cpu().numpy()]
-        val_preds = (val_probs > threshold).astype(int)
 
-        test_probs = probs[data.test_mask.cpu().numpy()]
-        test_preds = (test_probs > threshold).astype(int)
+def test_gnn(model, data, device, batch_size, num_neighbors, threshold=0.25):
+    model.eval()
+    
+    inference_nodes = torch.where(data.val_mask | data.test_mask)[0]
+    inf_loader = NeighborLoader(
+        data,
+        num_neighbors=num_neighbors,
+        batch_size=batch_size,
+        input_nodes=inference_nodes,
+        num_workers=1,
+        shuffle=False
+    )
+
+    all_probs = []
+    with torch.no_grad():
+        for batch in inf_loader:
+            batch = batch.to(device)
+            out = model(batch.x, batch.edge_index)
+            # 只取 Seed nodes 的機率 (類別 1 的機率)
+            prob = torch.softmax(out, dim=1)[:batch.batch_size, 1]
+            all_probs.append(prob.cpu())
+    
+    full_probs = torch.cat(all_probs, dim=0)
+    final_probs = torch.zeros(data.num_nodes)
+    final_probs[inference_nodes] = full_probs
+
+    val_probs = final_probs[data.val_mask].numpy()
+    val_preds = (val_probs > threshold).astype(int)
+    
+    test_probs = final_probs[data.test_mask].numpy()
+    test_preds = (test_probs > threshold).astype(int)
 
     return val_probs, val_preds, test_probs, test_preds
 
@@ -351,7 +334,7 @@ def eval_gnn(model_name, y_val, y_test, val_probs, val_preds, test_probs, test_p
     return model_val_performance, model_test_performance
 
     
-def train_and_test_gnn(model_name, data, best_params=None):
+def train_and_test_gnn(model_name, data, device, batch_size, num_neighbors, best_params=None):
     # Extract best parameters or use defaults
     # in_channels = best_params.get('in_channels', None)
     # hidden_channels = best_params.get('hidden_channels', 64)
@@ -363,11 +346,11 @@ def train_and_test_gnn(model_name, data, best_params=None):
     lr = best_params.get('lr', 0.01)
     focalloss_alpha = best_params.get('focalloss_alpha', 0.875)
     threshold = best_params.get('threshold', 0.5)
-    gnn_train_loader = get_train_loader(data, batch_size=2048)
+    gnn_train_loader = get_train_loader(data, batch_size, num_neighbors)
     # {'hidden_channels': 32, 'num_layers': 4, 'dropout': 0.4062143730734663, 'heads': 4, 'lr': 0.0002074068439961685}.
     model = get_gnn(model_name, data, best_params)
     model = train_gnn_minibatch(model, gnn_train_loader, data, epochs, lr, focalloss_alpha)
-    return test_gnn(model, data, threshold)
+    return test_gnn(model, data, device, batch_size, num_neighbors, threshold)
      
 
 # ==============================================================================
@@ -401,8 +384,8 @@ def blending_catboost(data, gnns_val_probs, gnns_test_probs, best_params=None):
     X_test_meta = np.hstack(gnns_test_probs)
     print(f"X_val_meta shape: {X_val_meta.shape}, X_test_meta shape: {X_test_meta.shape}")
 
-    X_val_raw_meta = np.hstack([data.x[data.val_mask].cpu().numpy(), X_val_meta])
-    X_test_raw_meta = np.hstack([data.x[data.test_mask].cpu().numpy(), X_test_meta])
+    X_val_raw_meta = np.hstack([data.x[data.val_mask].numpy(), X_val_meta])
+    X_test_raw_meta = np.hstack([data.x[data.test_mask].numpy(), X_test_meta])
     print(f"X_val_final shape: {X_val_raw_meta.shape}, X_test_final shape: {X_test_raw_meta.shape}")
 
     # Extract best parameters or use defaults
@@ -424,7 +407,7 @@ def blending_catboost(data, gnns_val_probs, gnns_test_probs, best_params=None):
 
     # fit val data, 
     # predict test data
-    y_val = data.y[data.val_mask].cpu().numpy()
+    y_val = data.y[data.val_mask].numpy()
     cat.fit(X_val_raw_meta, y_val)
 
     test_preds = cat.predict(X_test_raw_meta)
@@ -453,9 +436,13 @@ def main(dataset_name):
     # data = load_elliptic_data()
     if dataset_name == 'elliptic':
         data = dataset_zoo.load_elliptic_data()
+        batch_size=1024
+        num_neighbors=[25, 10]
     elif dataset_name == 'ethereum':
         data = dataset_zoo.load_ethereum_data()
-    data = data.to(device)
+        batch_size=1024
+        num_neighbors=[25, 10]
+    # data = data.to(device)
 
     # ========================================================================
     # 3. Train Isolation Forest baseline - done - 暫時comment for train GNN model
@@ -469,30 +456,6 @@ def main(dataset_name):
     # 4.1. TPE 優化參數 
     # 4.2. train GNN
     # ========================================================================
-    # 4.1. TPE - Optuna - done
-    # ========================================================================
-    print("\n4.1 TPE - Optuna GNN models...")
-    tpe_results = {}
-    gnn_models_list = inspect.getmembers(gnn_zoo, inspect.isfunction)
-    # print(type(gnn_models_list))
-
-    for model_name, _ in gnn_models_list:
-        study = optuna.create_study(directions=['maximize', 'maximize', 'maximize'])
-        study.optimize(lambda trial: gnn_objective(trial, model_name, data), n_trials=n_trials)
-        
-        best_trials = max(study.best_trials, key=lambda t: w_m_f1 * t.values[0] + w_c1_f1 * t.values[1] + w_auc * t.values[2])
-        tpe_results[model_name] = {
-            "macro_f1": best_trials.values[0],
-            "c1_f1": best_trials.values[1],
-            "auc": best_trials.values[2],
-            "best_params": best_trials.params,
-        }
-        print(model_name, "="*60, "\n", tpe_results[model_name])
-
-    # print(f"Best hyperparameters - {model_name}: {study.best_params}")
-    # print(f"Best score - auc?: {study.best_value}")
-
-    # ========================================================================
     # 4. Train GCN model
     # gnn_models_list = ['GCN', 'GAT', 'GraphSAGE', 'GIN', 'APPNP', 'ChebNet', 'GCNII',
     #     'MixHop_GCN', 'MixHop_GAT', 'MixHop_GraphSAGE', 'MixHop_GIN',
@@ -501,8 +464,8 @@ def main(dataset_name):
     # ]
     # ========================================================================
     print("\n4.2. Training GNNs baseline...")
-    y_val = data.y[data.val_mask].cpu().numpy()
-    y_test = data.y[data.test_mask].cpu().numpy()
+    y_val = data.y[data.val_mask].numpy()
+    y_test = data.y[data.test_mask].numpy()
     gnns_val_probs, gnns_test_probs = [], []
     models_val_performance, models_test_performance = [], []
 
@@ -511,9 +474,16 @@ def main(dataset_name):
     # gnn_models_list.extend([('GCN', 0), ('GAT', 0), ('GraphSAGE', 0), ('GIN', 0)])
     print('gnn models length:', len(gnn_models_list))
     for model_name, _ in gnn_models_list:
+
+        print('load TPE results')
+        with open(f"{model_name}_tpe_params_{batch_size}.json", "r") as f:
+            tpe_results = json.load(f)
+        best_params = tpe_results["best_params"]
+        print('best_params:', best_params)
+
         print(f"\n--- Training {model_name} ---")
-        best_params = tpe_results.get(model_name, {}).get("best_params", {})
-        gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds = train_and_test_gnn(model_name, data, best_params)
+        # best_params = tpe_results.get(model_name, {}).get("best_params", {})
+        gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds = train_and_test_gnn(model_name, data, device, batch_size, num_neighbors, best_params)
         gnns_val_probs.append(gnn_val_probs.reshape(-1, 1))
         gnns_test_probs.append(gnn_test_probs.reshape(-1, 1))
         model_val_performance, model_test_performance = eval_gnn(model_name, y_val, y_test, gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds)
@@ -529,7 +499,7 @@ def main(dataset_name):
     # pd.set_option('display.precision', 4)
     df_val_results = pd.DataFrame(models_val_performance)
     df_test_results = pd.DataFrame(models_test_performance)
-    print("\nValidation Performance", df_val_results, "\n", "="*60, "\ntesting Performance", df_test_results)
+    print("\nValidation Performance\n", df_val_results, "\n", "="*60, "\ntesting Performance\n", df_test_results)
 
     # ========================================================================
     # 5. training CatBoost
@@ -542,9 +512,9 @@ def main(dataset_name):
     # 初始化 GA (11 個模型，所以基因長度是 11)
     print("\n5.1. GA Crossover model...")
     # 使用 validation set 同 GNN 預測結果作為 GA 的 input，因為 test set 係唔可以用嚟做 model selection
-    X_val_raw = data.x[data.val_mask].cpu().numpy()
+    X_val_raw = data.x[data.val_mask].numpy()
     # 需要 validation set 的 timesteps 來做 GA 的時間切分，避免 data leakage
-    val_ts = data.timesteps[data.val_mask].cpu().numpy()
+    val_ts = data.timesteps[data.val_mask].numpy()
 
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate, GNN models gnn_val_probs
     bound_fitness = lambda ga_instance, solution, solution_idx: fitness_func(
@@ -576,7 +546,7 @@ def main(dataset_name):
     # 使用篩選後的 Probs 進行 Blending
     print(f"Using {len(selected_indices)} models selected by GA for final Blending.")
     
-    study = optuna.create_study(direction='maximize')
+    study = optuna.create_study(directions=['maximize', 'maximize', 'maximize'])
     study.optimize(lambda trial: catboost_objective(trial, data, filtered_val_probs), n_trials=n_trials)
     cat_best_params = study.best_params
     cat_best_value = study.best_value
@@ -602,7 +572,7 @@ def main(dataset_name):
     cat_test_performance = eval_blending_catboost(y_test, cat_test_preds, cat_test_probs)
     models_test_performance.append(cat_test_performance)
     final_df_test_results = pd.concat([df_test_results, cat_test_performance], ignore_index=True)
-    print("\n", "="*60, "\ntesting Performance", final_df_test_results)
+    print("\n", "="*60, "\n", final_df_test_results)
 
 
     # ========================================================================

@@ -13,6 +13,9 @@ from torch_geometric.utils import degree, get_ppr
 from community import community_louvain
 from sklearn.preprocessing import StandardScaler
 
+import argparse
+
+
 RANDOM_SEED = 24027277
 
 def get_pagerank_features(edge_index, num_nodes, alpha=0.15):
@@ -108,7 +111,6 @@ def get_standard_scaler(data):
     scaler.fit(x_numpy[data.train_mask]) # 記住咗 Train Set 的 Mean 同 Std
     return scaler.transform(x_numpy)  # Fit and transform
     
-
 
 # =========================================================================================
 # Elliptic dataset
@@ -252,18 +254,26 @@ def load_pickle(fname):
     with open(fname, 'rb') as f:
         return pickle.load(f)
 
-
 def process_ethereum_data(dataset_dir='Dataset/ethereum dataset'):
     print("\n1. Processing Ethereum dataset...")
     # 1. load data
     G = load_pickle(dataset_dir+'/MulDiGraph.pkl')
 
+    # 2. get phishing nodes for subgraph sampling
+    phishing_nodes = [n for n, attr in G.nodes(data=True) if attr.get('isp') == 1]
+
+    # get 1-hop neighbours of phishing nodes
+    subgraph_nodes = set(phishing_nodes)
+    for node in phishing_nodes:
+        subgraph_nodes.update(G.neighbors(node))
+
+    S = G.subgraph(subgraph_nodes).copy()
+
     # 2. process nodes
-    phishing_addresses, non_phishing_addresses = [], []
     node_mapping = {}
     y_list = []
-    x_np = np.zeros((G.number_of_nodes(), 12), dtype=np.float32)
-    for i, (n, attr) in enumerate(G.nodes(data=True)):
+    x_np = np.zeros((S.number_of_nodes(), 12), dtype=np.float32)
+    for i, (n, attr) in enumerate(S.nodes(data=True)):
         # node_mapping for edge_index construction later
         node_mapping[n] = i
 
@@ -273,18 +283,18 @@ def process_ethereum_data(dataset_dir='Dataset/ethereum dataset'):
         # average receiving amount, total receiving amount, maximum receiving amount, 
         # transaction time interval ratio, and the total number of neighbors
         # --- Degree ---
-        in_d = G.in_degree(n)
-        out_d = G.out_degree(n)
+        in_d = S.in_degree(n)
+        out_d = S.out_degree(n)
         t_send, m_send, t_recv, m_recv = 0, 0, 0, 0
         all_ts = []
         
-        for _, _, d in G.in_edges(n, data=True):
+        for _, _, d in S.in_edges(n, data=True):
             amt = d.get('amount', 0)
             t_recv += amt
             if amt > m_recv: m_recv = amt
             all_ts.append(d.get('timestamp', 0))
             
-        for _, _, d in G.out_edges(n, data=True):
+        for _, _, d in S.out_edges(n, data=True):
             amt = d.get('amount', 0)
             t_send += amt
             if amt > m_send: m_send = amt
@@ -301,17 +311,11 @@ def process_ethereum_data(dataset_dir='Dataset/ethereum dataset'):
             in_d, out_d, (in_d+out_d)/2, in_d+out_d,
             t_send/out_d if out_d > 0 else 0, t_send, m_send,
             t_recv/in_d if in_d > 0 else 0, t_recv, m_recv,
-            t_ratio, len(list(G.neighbors(n)))
+            t_ratio, len(list(S.neighbors(n)))
         ]
 
         # y extract the labels for the nodes
         y_list.append(attr.get("isp", 0))  # 默認為 0 (non-phishing) 如果沒有 isp 屬性
-
-        # count phishing vs non-phishing for EDA for plt
-        if attr.get("isp") == 1:
-            phishing_addresses.append(n)
-        else:
-            non_phishing_addresses.append(n)
 
     y = torch.tensor(y_list, dtype=torch.long)
     x = torch.from_numpy(x_np)
@@ -319,26 +323,14 @@ def process_ethereum_data(dataset_dir='Dataset/ethereum dataset'):
 
 
     # 3. process edges
-    num_edges = G.number_of_edges()
+    num_edges = S.number_of_edges()
     edges_np = np.zeros((num_edges, 2), dtype=np.int64)
     edge_attr_np = np.zeros((num_edges, 2), dtype=np.float32)
-    for i, (u, v, attr) in enumerate(G.edges(data=True)):
+    for i, (u, v, attr) in enumerate(S.edges(data=True)):
         edges_np[i] = [node_mapping[u], node_mapping[v]]
         edge_attr_np[i] = [attr.get('amount', 0), attr.get('timestamp', 0)]
     edge_index = torch.from_numpy(edges_np).t().contiguous()
     edge_attr = torch.from_numpy(edge_attr_np)
-
-    # 4. plt ----------------------------------------------------
-    # plt.figure(figsize=(8, 6))
-    # sns.barplot(x=[0, 1], y=[len(non_phishing_addresses), len(phishing_addresses)])
-    # plt.xticks([0, 1], ["Non-Phishing", "Phishing"])
-    # plt.yscale('log')
-    # plt.title("Class Distribution")
-    # plt.ylabel("Number of Addresses")
-    # plt.xlabel("Category")
-    # for i, v in enumerate([len(non_phishing_addresses), len(phishing_addresses)]):
-    #     plt.text(i, v, f'{v}', ha='center', va='bottom', fontsize=12, fontweight='bold')
-    # plt.show()
 
     # 5. New Data ----------------------------------------------------
     data = Data(x=x, y=y, edge_index=edge_index, edge_attr=edge_attr)
@@ -350,11 +342,15 @@ def process_ethereum_data(dataset_dir='Dataset/ethereum dataset'):
     data.test_mask[int(data.num_nodes * 0.8):] = True
     print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
     
+    # 7. feature engineering - pagerank, degree, louvain -------------------------------
+    print("PageRank features...")
+    pagerank_features = get_pagerank_features(data.edge_index, data.x.size(0))
 
     # 6. Louvain ----------------------------------------------------
     print("Louvain features...")
     louvain_features, partition = get_louvain_features(data.edge_index, data.x.size(0), labels=data.y, train_mask=data.train_mask)
-    data.x = torch.cat([data.x, louvain_features], dim=1)
+    
+    data.x = torch.cat([data.x, louvain_features, pagerank_features], dim=1)
     print(f"Total features: {data.x.size(1)} dimensions")
 
     # 7. StandardScaler ----------------------------------------------------
@@ -364,10 +360,91 @@ def process_ethereum_data(dataset_dir='Dataset/ethereum dataset'):
     print(f"StandardScaler done...\nTotal features: {data.x.size(1)} dimensions")
 
     # 8. Save processed data
-    torch.save(data, dataset_dir + '/ethereum_processed_data.pt')
+    torch.save(data, dataset_dir + '/subgraph_ethereum_processed_data.pt')
+
+def eda_ethereum(dataset_dir='Dataset/ethereum dataset'):
+    print("\n1. EDA Ethereum dataset...")
+    # 1. load data
+    G = load_pickle(dataset_dir+'/MulDiGraph.pkl') 
 
 
-def load_ethereum_data(fname='Dataset/ethereum dataset/ethereum_processed_data.pt'):
+    num_nodes = G.number_of_nodes()
+    num_edges = G.number_of_edges()
+    avg_degree = (2 * num_edges) / num_nodes
+    print(f"Nodes: {num_nodes}")
+    print(f"Edges: {num_edges}")
+    print(f"average degree: {avg_degree:.4f}")
+
+    degrees = [d for n, d in G.degree()]
+    print(f"中位數度數: {np.median(degrees)}")
+    print(f"最大度數: {np.max(degrees)}")
+
+
+    node_data = []
+    for n, attr in G.nodes(data=True):
+        node_data.append(attr)
+    df_nodes = pd.DataFrame(node_data)
+
+    # --- 新增：檢索所有屬性欄位 ---
+    print("\n### 0. 欄位屬性 (Attributes/Columns) 檢索 ###")
+    
+    # 獲取節點屬性範例 (取第一個節點)
+    first_node = next(iter(G.nodes()))
+    node_keys = G.nodes[first_node].keys()
+    print(f"節點屬性 (Node Columns): {list(node_keys)}")
+    
+    # 獲取邊屬性範例 (取第一條邊)
+    if G.number_of_edges() > 0:
+        first_edge = next(iter(G.edges(data=True)))
+        edge_keys = first_edge[2].keys() # first_edge 為 (u, v, data_dict)
+        print(f"邊屬性 (Edge Columns): {list(edge_keys)}")
+    # --------------------------------
+
+    print("\n### 2. 節點屬性與標籤分佈 ###")
+    if 'isp' in df_nodes.columns:
+        counts = df_nodes['isp'].value_counts()
+        probs = df_nodes['isp'].value_counts(normalize=True) * 100
+        dist_df = pd.DataFrame({'數量': counts, '百分比 (%)': probs})
+        print(dist_df)
+    else:
+        print("警告：未在節點屬性中找到 'isp' 標籤。")
+
+    # 3. 缺失值檢測 (Missing Data)
+    print("\n### 3. 屬性缺失值統計 ###")
+    missing = df_nodes.isnull().sum()
+    if missing.sum() > 0:
+        print(missing[missing > 0])
+    else:
+        print("所有節點屬性完整，無缺失值。")
+
+    # 4. 邊屬性分析 (EDA on Edges)
+    edge_amounts = [d.get('amount', 0) for _, _, d in G.edges(data=True)]
+    print("\n### 4. 邊權重 (Amount) 統計 ###")
+    print(pd.Series(edge_amounts).describe())
+
+    # 5. 可視化 (Visualization)
+    fig, ax = plt.subplots(1, 2, figsize=(15, 6))
+
+    # 標籤比例柱狀圖
+    if 'isp' in df_nodes.columns:
+        sns.countplot(x='isp', data=df_nodes, ax=ax[0], palette='magma')
+        ax[0].set_title('Phishing (1) vs Non-Phishing (0) Distribution')
+        ax[0].set_yscale('log')
+        ax[0].set_ylabel('Count (Log Scale)')
+
+    # 節點度數分佈圖 (Degree Distribution)
+    degrees = [d for n, d in G.degree()]
+    sns.histplot(degrees, bins=50, kde=True, ax=ax[1], color='blue')
+    ax[1].set_title('Node Degree Distribution')
+    ax[1].set_xscale('log')
+    ax[1].set_yscale('log')
+    ax[1].set_xlabel('Degree (Log Scale)')
+
+    plt.tight_layout()
+    plt.show()
+
+
+def load_ethereum_data(fname='Dataset/ethereum dataset/subgraph_ethereum_processed_data.pt'):
     print("\n1. Loading Ethereum dataset...")
 
     data = torch.load(fname, weights_only=False)
@@ -377,5 +454,14 @@ def load_ethereum_data(fname='Dataset/ethereum dataset/ethereum_processed_data.p
     
     return data
 
-# process_ethereum_data()
-process_elliptic_data()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Blockchain Anomaly Detection with GNNs')
+    parser.add_argument('dataset', type=str,help='Pleaese select dataset: e1 or e2')
+    args = parser.parse_args()
+    if args.dataset == "e1":
+        process_elliptic_data()
+    elif  args.dataset == "e2":
+        process_ethereum_data()
+# 
+# eda_ethereum()
+# subgraph_process()

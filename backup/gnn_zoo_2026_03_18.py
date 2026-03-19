@@ -10,6 +10,10 @@ from torch.nn import ReLU, Dropout, BatchNorm1d, Softmax, LogSoftmax, Linear
 # =================================================================================
 # basic GNNs - done
 # =================================================================================
+# model = GCN(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm').to(device)
+# model = GAT(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm', heads=heads).to(device)
+# model = GraphSAGE(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm', aggr='mean').to(device)    
+# model = GIN(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm').to(device)
 
 def GCN_Model(best_params=None):
     in_channels = best_params.get('in_channels', None)
@@ -51,6 +55,25 @@ def GIN_Model(best_params=None):
 # APPNP 2 layer version 的表現很差，可能是因為 APPNP 的特性使得過多的層數反而會導致over-smoothing問題，從而降低模型的表現。
 # APPNP 2 layer version 的 recall, F1全部是0
 # =================================================================================
+# def APPNP_Model(best_params=None):
+#     in_channels = best_params.get('in_channels', None)
+#     hidden_channels = best_params.get('hidden_channels', 64)
+#     out_channels = best_params.get('out_channels', 2)
+#     dropout = best_params.get('dropout', 0.5)
+#     K = best_params.get('K', 10)
+#     alpha = best_params.get('alpha', 0.1)
+
+#     return Sequential('x, edge_index', [
+#         ##    input layer, input layer ->   hidden layer
+#         (MLP([in_channels, hidden_channels, hidden_channels], dropout=dropout), 'x -> x'),
+       
+#         ##    hidden layer,    hidden layer -> output layer
+#         (MLP([hidden_channels, out_channels], norm=None), 'x -> x'),
+
+#         # output layer
+#         (APPNP(K=K, alpha=alpha, dropout=dropout), 'x, edge_index -> x'),
+#         # (LogSoftmax(dim=1), 'x -> x')
+#     ])
 
 def APPNP_1Layer_Model(best_params=None):
     in_channels = best_params.get('in_channels', None)
@@ -76,6 +99,24 @@ def APPNP_1Layer_Model(best_params=None):
 # --------- done ---------
 # 留 linear version
 # =================================================================================
+# def PureChebNetModel(in_channels, hidden_channels, out_channels, dropout=0.5, K=3):
+#     return Sequential('x, edge_index', [
+#         ## input layer
+#         (ChebConv(in_channels, hidden_channels, K=K), 'x, edge_index -> x'),
+#         (BatchNorm1d(hidden_channels), 'x -> x'),
+#         (ReLU(inplace=True), 'x -> x'),
+#         (Dropout(dropout), 'x -> x'),
+
+#         ## hidden layer
+#         (ChebConv(hidden_channels, hidden_channels, K=K), 'x, edge_index -> x'),
+#         (BatchNorm1d(hidden_channels), 'x -> x'),
+#         (ReLU(inplace=True), 'x -> x'),
+#         (Dropout(dropout), 'x -> x'),
+
+#         ## output layer
+#         (ChebConv(hidden_channels, out_channels, K=K), 'x, edge_index -> x'),
+#         (LogSoftmax(dim=1), 'x -> x'),
+#     ])
 
 def LinearChebNet_Model(best_params=None):
     in_channels = best_params.get('in_channels', None)
@@ -110,6 +151,28 @@ def LinearChebNet_Model(best_params=None):
 # --------- done ---------
 # 1 dropout version 的表現比2 dropout version好 hidden layer不同dropout的表現更佳
 # =================================================================================
+# def MixHopGCNModel(in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2]):
+#     ## Loss 曲線平滑且緩慢下降：這是好事，代表正規化在發揮作用。
+#     ## Training Loss 降不下來：這代表正規化過頭了。
+#     ## 全表現比GCN MixHop 更好
+
+#     mix_out = hidden_channels * len(powers)
+
+#     return Sequential('x, edge_index', [
+#         (MixHopConv(in_channels, hidden_channels, powers=powers), 'x, edge_index -> x'),
+#         (BatchNorm1d(mix_out), 'x -> x'),
+#         (ReLU(inplace=True), 'x -> x'),
+#         (Dropout(dropout), 'x -> x'),
+
+#         (GCNConv(mix_out, hidden_channels), 'x, edge_index -> x'),
+#         (BatchNorm1d(hidden_channels), 'x -> x'),
+#         (ReLU(inplace=True), 'x -> x'),
+#         (Dropout(dropout), 'x -> x'),
+
+#         (Linear(hidden_channels, out_channels), 'x -> x'),
+#         (LogSoftmax(dim=1), 'x -> x'),
+#     ])
+
 
 def MixHopGCN_1dropout_Model(best_params=None):
     in_channels = best_params.get('in_channels', None)
@@ -177,6 +240,25 @@ def MixHopGAT_Model(best_params=None):
 # 沒有bottleneck layer的版本表現極差，precision, recall, F1全部是0
 # =================================================================================
 
+# def MixHopGraphSAGEModel(in_channels, hidden_channels, out_channels, dropout=0.5, powers=[0, 1, 2]):
+#     mix_out = hidden_channels * len(powers)
+
+#     return Sequential('x, edge_index', [
+#         (MixHopConv(in_channels, hidden_channels, powers=powers), 'x, edge_index -> x'),
+#         (BatchNorm1d(mix_out), 'x -> x'),
+#         (ReLU(inplace=True), 'x -> x'),
+#         (Dropout(p=dropout), 'x -> x'),
+
+#         ## aggr lstm, max
+#         (SAGEConv(mix_out, hidden_channels), 'x, edge_index -> x'),  
+#         (BatchNorm1d(hidden_channels), 'x -> x'),
+#         (ReLU(inplace=True), 'x -> x'),
+#         (Dropout(p=dropout), 'x -> x'),
+
+#         (Linear(hidden_channels, out_channels), 'x -> x'),
+#         (LogSoftmax(dim=1), 'x -> x'),
+#     ])
+
 def MixHopGraphSAGE_Bottleneck_Model(best_params=None):
     in_channels = best_params.get('in_channels', None)
     hidden_channels = best_params.get('hidden_channels', 64)
@@ -240,3 +322,33 @@ def MixHopGIN_Model(best_params=None):
         (Linear(hidden_channels, out_channels), 'x -> x'),
         # (LogSoftmax(dim=1), 'x -> x'),
     ])
+
+# def MixHopGINModel_noBRD(best_params=None):
+#     in_channels = best_params.get('in_channels', None)
+#     hidden_channels = best_params.get('hidden_channels', 64)
+#     out_channels = best_params.get('out_channels', 2)
+#     dropout = best_params.get('dropout', 0.5)
+#     powers = best_params.get('powers', [0, 1, 2])
+#     mix_out = hidden_channels * len(powers)
+    
+#     mix_out = hidden_channels * len(powers)
+
+#     return Sequential('x, edge_index', [
+        
+#         (MixHopConv(in_channels, hidden_channels, powers=powers), 'x, edge_index -> x'),
+#         (BatchNorm1d(mix_out), 'x -> x'),
+#         (ReLU(inplace=True), 'x -> x'),
+#         (Dropout(p=dropout), 'x -> x'),
+
+#         # 注意：GINConv 本身會處理鄰居聚合，內部的 gin_mlp 負責特徵轉換
+#         (GINConv(MLP([mix_out, hidden_channels, hidden_channels], 
+#                  dropout=dropout)), 'x, edge_index -> x'),
+#         # (BatchNorm1d(hidden_channels), 'x -> x'),
+#         # (ReLU(inplace=True), 'x -> x'),
+#         # (Dropout(p=dropout), 'x -> x'),
+
+#         (Linear(hidden_channels, out_channels), 'x -> x'),
+#         # (LogSoftmax(dim=1), 'x -> x'),
+    
+#     ])
+

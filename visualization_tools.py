@@ -69,24 +69,24 @@ def plot_model_comparison(df):
         
         # 自動存檔，檔名動態生成
         current_time = datetime.now().strftime("%m%d_%H%M")
-        file_name = f"comparison_{metric.replace(' ', '_')}_{current_time}.png"
+        file_name = f"results/comparison_{metric.replace(' ', '_')}_{current_time}.png"
         plt.savefig(file_name, dpi=300)
         plt.close() # 關閉畫布，避免在循環中佔用過多記憶體
         
         print(f"已生成圖表: {file_name}")
 
 
-    plt.figure(figsize=(12, 6))
-    # 以 Macro F1-score 排序，這樣一眼就能看出誰最強
-    df_sorted = df.sort_values('macro f1-score', ascending=False)
+    # plt.figure(figsize=(12, 6))
+    # # 以 Macro F1-score 排序，這樣一眼就能看出誰最強
+    # df_sorted = df.sort_values('macro f1-score', ascending=False)
     
-    sns.barplot(x='model', y='macro f1-score', data=df_sorted, palette='viridis')
-    plt.xticks(rotation=45, ha='right')
-    plt.title('GNN Models Performance Comparison (Macro F1)')
-    plt.ylabel('Macro F1-score')
-    plt.tight_layout()
-    plt.savefig('model_comparison.png')
-    plt.show()
+    # sns.barplot(x='model', y='macro f1-score', data=df_sorted, palette='viridis')
+    # plt.xticks(rotation=45, ha='right')
+    # plt.title('GNN Models Performance Comparison (Macro F1)')
+    # plt.ylabel('Macro F1-score')
+    # plt.tight_layout()
+    # plt.savefig('model_comparison.png')
+    # plt.show()
 
 
 
