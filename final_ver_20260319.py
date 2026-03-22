@@ -87,7 +87,7 @@ def get_train_loader(data, batch_size=512, num_neighbors=[25, 10]):
 
 # 假設 X_val_meta 是你所有 GNN 預測結果組成的 DataFrame
 def fitness_func(ga_instance, solution, solution_idx, 
-                 X_val_raw, val_ts, X_val_meta, y_val):
+                 X_val_raw, val_ts, X_val_meta, y_val, split_threshold):
     # solution 是 GA 產生的 [1, 0, 1...] 陣列
     # selected_cols = [i for i, bit in enumerate(solution) if bit == 1]
     # print('selected_cols 1:', selected_cols)
@@ -98,8 +98,9 @@ def fitness_func(ga_instance, solution, solution_idx,
     if len(selected_cols) == 0: return 0
     
     # 只選取部分 GNN 的預測作為特徵
-    ga_train_mask = (val_ts < 39)
-    ga_val_mask = (val_ts >= 39)
+    ga_train_mask = (val_ts < split_threshold)
+    ga_val_mask = (val_ts >= split_threshold)
+
     X_ga_train_raw = X_val_raw[ga_train_mask]
     X_ga_val_raw = X_val_raw[ga_val_mask]
     y_ga_train = y_val[ga_train_mask]
@@ -186,30 +187,45 @@ def isolation_forest_baseline(data):
 
     # Predict: 1=normal, -1=anomaly
     y_pred = clf.predict(X_test)
+    y_pred = (y_pred == -1).astype(int) # Convert: 1=normal, -1=anomaly -> 1=anomaly, 0=normal
     anomaly_scores = clf.decision_function(X_test)
 
-    # Convert: 1=normal, -1=anomaly -> 1=anomaly, 0=normal
-    y_pred = (y_pred == -1).astype(int)
+    test_report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
+    test_auc = roc_auc_score(y_test, -anomaly_scores)
 
     # Evaluate
-    baseline_results = {
-        'macro_f1': f1_score(y_test, y_pred, average='macro', zero_division=0),
-        'macro_precision': precision_score(y_test, y_pred, average='macro', zero_division=0),
-        'macro_recall': recall_score(y_test, y_pred, average='macro', zero_division=0),
-        'macro_auc': roc_auc_score(y_test, -anomaly_scores),
-        'gmean': np.sqrt(recall_score(y_test, y_pred, pos_label=1, zero_division=0) * 
-                        (1 - precision_score(y_test, y_pred, pos_label=0, zero_division=0))),
-        'f1': f1_score(y_test, y_pred, pos_label=1, zero_division=0),
-        'precision': precision_score(y_test, y_pred, pos_label=1, zero_division=0),
-        'recall': recall_score(y_test, y_pred, pos_label=1, zero_division=0),
-        'auc': roc_auc_score(y_test, -anomaly_scores),
-        'accuracy': accuracy_score(y_test, y_pred),
-    }
+    # baseline_results = {
+    #     'macro_f1': f1_score(y_test, y_pred, average='macro', zero_division=0),
+    #     'macro_precision': precision_score(y_test, y_pred, average='macro', zero_division=0),
+    #     'macro_recall': recall_score(y_test, y_pred, average='macro', zero_division=0),
+    #     'macro_auc': roc_auc_score(y_test, -anomaly_scores),
+    #     'gmean': np.sqrt(recall_score(y_test, y_pred, pos_label=1, zero_division=0) * 
+    #                     (1 - precision_score(y_test, y_pred, pos_label=0, zero_division=0))),
+    #     'f1': f1_score(y_test, y_pred, pos_label=1, zero_division=0),
+    #     'precision': precision_score(y_test, y_pred, pos_label=1, zero_division=0),
+    #     'recall': recall_score(y_test, y_pred, pos_label=1, zero_division=0),
+    #     'auc': roc_auc_score(y_test, -anomaly_scores),
+    #     'accuracy': accuracy_score(y_test, y_pred),
+    # }
+    # print(f"Isolation Forest baseline results:")
+    # for key, value in baseline_results.items():
+    #     print(f"{key}: {value}")
+    # print("Baseline evaluation completed")
 
-    print(f"Isolation Forest baseline results:")
-    for key, value in baseline_results.items():
-        print(f"{key}: {value}")
-    print("Baseline evaluation completed")
+    baseline_results = {
+        'model': "Isolation Forest",
+        'class 1 precision': test_report['1']['precision'],
+        'class 1 recall': test_report['1']['recall'],
+        'class 1 f1-score': test_report['1']['f1-score'],
+        'class 0 precision': test_report['0']['precision'],
+        'class 0 recall': test_report['0']['recall'],
+        'class 0 f1-score': test_report['0']['f1-score'],
+        'macro precision': test_report['macro avg']['precision'],
+        'macro recall': test_report['macro avg']['recall'],
+        'macro f1-score': test_report['macro avg']['f1-score'],
+        'accuracy': test_report['accuracy'],
+        'auc': test_auc,
+    }
 
     return baseline_results
 
@@ -224,30 +240,18 @@ def get_gnn(model_name, data, best_params):
     return model
 
 
-# def train_gnn(model, data, epochs=100, lr=0.002, alpha=0.875):
-#     criterion = FocalLoss(alpha=alpha, gamma=2.0, reduction='mean')
-#     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=5e-4)
-#     model.train()
-#     for _ in range(epochs):
-#         optimizer.zero_grad()
-#         out = model(data.x, data.edge_index)
-#         loss = criterion(out[data.train_mask], data.y[data.train_mask])
-#         loss.backward()
-#         optimizer.step()
-#     return model
-
-
-def train_gnn_minibatch(model, loader, data, epochs=100, lr=0.002, alpha=0.875):
-    criterion = FocalLoss(alpha=alpha, gamma=2.0, reduction='mean')
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=5e-4)
+def train_gnn_minibatch(model, loader, device, epochs=100, lr=0.002, alpha=0.875, gamma=2.0, weight_decay=5e-4):
+    criterion = FocalLoss(alpha=alpha, gamma=gamma, reduction='mean')
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     model.train()
     for _ in range(epochs):
         total_loss = 0
         for batch in loader:
-            batch = batch.to(data.x.device)
+            batch = batch.to(device)
             optimizer.zero_grad()
             out = model(batch.x, batch.edge_index)
-            loss = criterion(out[batch.train_mask], batch.y[batch.train_mask])
+            # loss = criterion(out[batch.train_mask], batch.y[batch.train_mask])
+            loss = criterion(out[:batch.batch_size], batch.y[:batch.batch_size])
             total_loss += loss.item()
             loss.backward()
             optimizer.step()
@@ -256,14 +260,13 @@ def train_gnn_minibatch(model, loader, data, epochs=100, lr=0.002, alpha=0.875):
 
 def test_gnn(model, data, device, batch_size, num_neighbors, threshold=0.25):
     model.eval()
-    
     inference_nodes = torch.where(data.val_mask | data.test_mask)[0]
     inf_loader = NeighborLoader(
         data,
         num_neighbors=num_neighbors,
         batch_size=batch_size,
         input_nodes=inference_nodes,
-        num_workers=1,
+        num_workers=8,
         shuffle=False
     )
 
@@ -345,11 +348,14 @@ def train_and_test_gnn(model_name, data, device, batch_size, num_neighbors, best
     epochs = best_params.get('epochs', 100)
     lr = best_params.get('lr', 0.01)
     focalloss_alpha = best_params.get('focalloss_alpha', 0.875)
+    focalloss_gamma = best_params.get('focalloss_gamma', 2.0)
+    weight_decay = best_params.get('weight_decay', 5e-4)
     threshold = best_params.get('threshold', 0.5)
     gnn_train_loader = get_train_loader(data, batch_size, num_neighbors)
     # {'hidden_channels': 32, 'num_layers': 4, 'dropout': 0.4062143730734663, 'heads': 4, 'lr': 0.0002074068439961685}.
     model = get_gnn(model_name, data, best_params)
-    model = train_gnn_minibatch(model, gnn_train_loader, data, epochs, lr, focalloss_alpha)
+    model.to(device)
+    model = train_gnn_minibatch(model, gnn_train_loader, device, epochs, lr, focalloss_alpha, focalloss_gamma, weight_decay)
     return test_gnn(model, data, device, batch_size, num_neighbors, threshold)
      
 
@@ -362,7 +368,7 @@ def eval_blending_catboost(y_test, test_preds, test_probs):
     test_report = classification_report(y_test, test_preds, zero_division=0, output_dict=True)
     test_auc = roc_auc_score(y_test, test_probs)
     model_test_performance = {
-        'model': 'Catboosting',
+        'model': 'CatBoost_Blending',
         'class 1 precision': test_report['1']['precision'],
         'class 1 recall': test_report['1']['recall'],
         'class 1 f1-score': test_report['1']['f1-score'],
@@ -434,11 +440,11 @@ def main(dataset_name):
     # ========================================================================
     
     # data = load_elliptic_data()
-    if dataset_name == 'elliptic':
+    if dataset_name == 'e1':
         data = dataset_zoo.load_elliptic_data()
         batch_size=1024
         num_neighbors=[25, 10]
-    elif dataset_name == 'ethereum':
+    elif dataset_name == 'e2':
         data = dataset_zoo.load_ethereum_data()
         batch_size=1024
         num_neighbors=[25, 10]
@@ -475,13 +481,13 @@ def main(dataset_name):
     print('gnn models length:', len(gnn_models_list))
     for model_name, _ in gnn_models_list:
 
-        print('load TPE results')
-        with open(f"{model_name}_tpe_params_{batch_size}.json", "r") as f:
+        print('\nload TPE results')
+        with open(f"best_model_params/{model_name}_params_{dataset_name}.json", "r") as f:
             tpe_results = json.load(f)
-        best_params = tpe_results["best_params"]
+        best_params = tpe_results[model_name]["best_params"]
         print('best_params:', best_params)
 
-        print(f"\n--- Training {model_name} ---")
+        print(f"--- Training {model_name} ---")
         # best_params = tpe_results.get(model_name, {}).get("best_params", {})
         gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds = train_and_test_gnn(model_name, data, device, batch_size, num_neighbors, best_params)
         gnns_val_probs.append(gnn_val_probs.reshape(-1, 1))
@@ -489,6 +495,8 @@ def main(dataset_name):
         model_val_performance, model_test_performance = eval_gnn(model_name, y_val, y_test, gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds)
         models_val_performance.append(model_val_performance)
         models_test_performance.append(model_test_performance)
+
+        print("--- done ---")
 
     # 1. 設置顯示所有 Column (唔好用 ... 隱藏)
     pd.set_option('display.max_columns', None)
@@ -514,12 +522,18 @@ def main(dataset_name):
     # 使用 validation set 同 GNN 預測結果作為 GA 的 input，因為 test set 係唔可以用嚟做 model selection
     X_val_raw = data.x[data.val_mask].numpy()
     # 需要 validation set 的 timesteps 來做 GA 的時間切分，避免 data leakage
-    val_ts = data.timesteps[data.val_mask].numpy()
+    val_ts = None
+    if dataset_name == 'e1':
+        val_ts = data.timesteps[data.val_mask].numpy()
+        split_threshold = 39
+    else:
+        val_ts = np.arange(X_val_raw.shape[0])
+        split_threshold = int(len(val_ts) * 0.7)
 
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate, GNN models gnn_val_probs
     bound_fitness = lambda ga_instance, solution, solution_idx: fitness_func(
         ga_instance, solution, solution_idx, 
-        X_val_raw, val_ts, X_val_meta, y_val
+        X_val_raw, val_ts, X_val_meta, y_val, split_threshold
     )
     # partial(fitness_func, X_data=X_val_raw_meta, y_true=y_val)
     print('gnn models length:', len(gnn_models_list))
@@ -548,11 +562,21 @@ def main(dataset_name):
     
     study = optuna.create_study(directions=['maximize', 'maximize', 'maximize'])
     study.optimize(lambda trial: catboost_objective(trial, data, filtered_val_probs), n_trials=n_trials)
-    cat_best_params = study.best_params
-    cat_best_value = study.best_value
+    best_trials = max(study.best_trials, key=lambda t: w_m_f1 * t.values[0] + w_c1_f1 * t.values[1] + w_auc * t.values[2])
+    # tpe_results[model_name] = {
+    #     "macro_f1": best_trials.values[0],
+    #     "c1_f1": best_trials.values[1],
+    #     "auc": best_trials.values[2],
+    #     "best_params": best_trials.params,
+    # }
+    # print("best param", model_name, "="*60, "\n", tpe_results[model_name])
+    cat_best_params = best_trials.params
+    # cat_best_params = study.best_params
+    # cat_best_value = study.best_value
     print(f"Best hyperparameters - CatBoost: {cat_best_params}")
-    print(f"Best score - auc?: {cat_best_value}")
-    
+    # print(f"Best score - auc?: {cat_best_value}")
+    for trial in study.best_trials:
+        print(f"Trial #{trial.number} Values: {trial.values}")
     # study = optuna.create_study(direction='maximize')
     # study.optimize(lambda trial: catboost_objective(trial, data, gnns_val_probs, gnns_test_probs), n_trials=n_trials)
     # print(f"Best hyperparameters - CatBoost: {study.best_params}")
@@ -571,7 +595,8 @@ def main(dataset_name):
     # cat_test_preds, cat_test_probs = blending_catboost(data, gnns_val_probs, gnns_test_probs)
     cat_test_performance = eval_blending_catboost(y_test, cat_test_preds, cat_test_probs)
     models_test_performance.append(cat_test_performance)
-    final_df_test_results = pd.concat([df_test_results, cat_test_performance], ignore_index=True)
+    df_cat_preformance = pd.DataFrame([cat_test_performance])
+    final_df_test_results = pd.concat([df_test_results, df_cat_preformance], ignore_index=True)
     print("\n", "="*60, "\n", final_df_test_results)
 
 
