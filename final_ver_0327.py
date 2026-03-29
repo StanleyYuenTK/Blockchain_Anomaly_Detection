@@ -34,7 +34,7 @@ RANDOM_SEED = 24027277
 w_m_f1, w_c1_f1, w_auc = 0.4, 0.5, 0.1
 n_trials=50
 epochs=200
-
+MIN_GA_MODELS = 1
 # ==============================================================================
 # Genetic Algorithm
 # https://pygad.readthedocs.io/en/latest/
@@ -44,7 +44,9 @@ def fitness_func(ga_instance, solution, solution_idx,
 
     selected_cols = np.where(solution == 1)[0]
 
-    if len(selected_cols) == 0: return 0
+    # if len(selected_cols) == 0: return 0
+    if len(selected_cols) < MIN_GA_MODELS:
+        return 0
     
     ga_train_mask = (val_ts < split_threshold)
     ga_val_mask = (val_ts >= split_threshold)
@@ -60,21 +62,29 @@ def fitness_func(ga_instance, solution, solution_idx,
     X_train_final = np.hstack([X_ga_train_raw, X_ga_train_meta])
     X_val_final = np.hstack([X_ga_val_raw, X_ga_val_meta])
 
-    clf = CatBoostClassifier(
-        iterations=20,
-        learning_rate=0.1,
-        depth=5,
-        bootstrap_type='Bernoulli',
-        subsample=0.8,
-        # task_type='GPU'
-        # devices='0',
+    cat = CatBoostClassifier(
+        iterations=epochs,
+        early_stopping_rounds=(epochs*0.2),
+
+        learning_rate=0.03,
+        depth=4,
+        l2_leaf_reg=10,
+        loss_function='Logloss',
+        eval_metric='F1',
+        auto_class_weights='Balanced',
+
+        ## constant
+        random_seed=RANDOM_SEED,
+        task_type='GPU',
+        devices='0',
         silent=True,
-        allow_writing_files=False
+        allow_writing_files=False,
     )
-    clf.fit(X_train_final, y_ga_train)
+
+    cat.fit(X_train_final, y_ga_train, eval_set=(X_val_final, y_ga_val))
     
-    preds = clf.predict(X_val_final)
-    probs = clf.predict_proba(X_val_final)[:, 1]
+    preds = cat.predict(X_val_final)
+    probs = cat.predict_proba(X_val_final)[:, 1]
 
     c1_f1 = f1_score(y_ga_val, preds)
     macro_f1 = f1_score(y_ga_val, preds, average='macro')
@@ -97,27 +107,33 @@ def catboost_objective(trial, data, gnns_val_probs):
     X_tr, X_ev, y_tr, y_ev = train_test_split(X_val_raw_meta, y_val, test_size=0.25, random_state=RANDOM_SEED)
 
     # Define search space
-    # iterations = trial.suggest_int('iterations', 100, 500, step=100)
-    iterations = 500
+    # iterations = 500
     learning_rate = trial.suggest_float('learning_rate', 1e-3, 0.5, log=True)
     depth = trial.suggest_int('depth', 4, 10)
     l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 1e-2, 10.0, log=True)
+
     cat = CatBoostClassifier(
-        iterations,
-        learning_rate,
-        depth,
-        l2_leaf_reg,
+        iterations=epochs,
+        early_stopping_rounds=(epochs*0.2),
+
+        learning_rate=learning_rate,
+        depth=depth,
+        l2_leaf_reg=l2_leaf_reg,
         loss_function='Logloss',
         eval_metric='F1',
+        auto_class_weights='Balanced',
+
+        ## constant
+        random_seed=RANDOM_SEED,
         task_type='GPU',
         devices='0',
-        early_stopping_rounds=30,
-        random_seed=RANDOM_SEED,
-        auto_class_weights='Balanced',
-        verbose=100,
+        silent=True,
+        allow_writing_files=False,
     )
 
-    cat.fit(X_tr, y_tr)
+
+    # cat.fit(X_tr, y_tr)
+    cat.fit(X_tr, y_tr, eval_set=(X_ev, y_ev), use_best_model=True)
 
     test_preds = cat.predict(X_ev)
     test_probs = cat.predict_proba(X_ev)[:, 1]
@@ -156,7 +172,7 @@ def isolation_forest_baseline(data):
     y_test = data.y[data.test_mask].numpy()
 
     # Train Isolation Forest
-    clf = IsolationForest(random_state=24027277, contamination=0.05)
+    clf = IsolationForest(random_state=RANDOM_SEED, contamination=0.05)
     clf.fit(X_train)
 
     # Predict: 1=normal, -1=anomaly
@@ -301,7 +317,7 @@ def eval_gnn(model_name, y_val, y_test, val_probs, val_preds, test_probs, test_p
     return model_val_performance, model_test_performance
 
     
-def train_and_test_gnn(model_name, data, device, best_params=None):
+def train_and_test_gnn(model_name, data, device, best_params={}):
     lr = best_params.get('lr', 0.01)
     focalloss_alpha = best_params.get('focalloss_alpha', 0.875)
     weight_decay = best_params.get('weight_decay', 5e-4)
@@ -339,7 +355,7 @@ def eval_stacking_catboost(y_test, test_preds, test_probs):
     return model_test_performance
 
 
-def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params=None):
+def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params={}):
     ## process meta data
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate
     X_test_meta = np.hstack(gnns_test_probs)
@@ -351,25 +367,31 @@ def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params=None):
 
     # Extract best parameters or use defaults
     iterations = epochs
-    learning_rate = best_params.get('learning_rate', 0.05)
+    learning_rate = best_params.get('learning_rate', 0.03)
     depth = best_params.get('depth', 4)
-    l2_leaf_reg = best_params.get('l2_leaf_reg', 3.0)
+    l2_leaf_reg = best_params.get('l2_leaf_reg', 10.0)
 
     ## create catboost model and train and predict
     cat = CatBoostClassifier(
         iterations=iterations,
+        # early_stopping_rounds=(epochs*0.2),
+        
         learning_rate=learning_rate,
         depth=depth,
         l2_leaf_reg=l2_leaf_reg,
         loss_function='Logloss',
         eval_metric='F1',
+        auto_class_weights='Balanced',
+
+        # constant
+        random_seed=RANDOM_SEED,
         task_type='GPU',
         devices='0',
-        early_stopping_rounds=30,
-        random_seed=RANDOM_SEED,
-        auto_class_weights='Balanced',
+        # silent=True,
+        # allow_writing_files=False,
         verbose=100,
     )
+
     print(cat.get_params())
 
     # fit val data, 
@@ -469,7 +491,7 @@ def main(dataset_name):
     # ========================================================================
     # GA
     # ========================================================================
-    print("\n5.1. GA Crossover model...")
+    print("\nGA Crossover model...")
     X_val_raw = data.x[data.val_mask].numpy()
     val_ts = None
     if 'e1' in dataset_name:
@@ -486,10 +508,10 @@ def main(dataset_name):
     )
     print('gnn models length:', len(gnn_models_list))
     ga_instance = pygad.GA(
-        num_generations=50, 
+        num_generations=10, 
+        sol_per_pop=10, 
         num_parents_mating=5, 
         fitness_func=bound_fitness,
-        sol_per_pop=50, 
         num_genes=len(gnn_models_list),
         parent_selection_type='tournament',
         crossover_type="two_points",
@@ -502,16 +524,17 @@ def main(dataset_name):
     solution, solution_fitness, solution_idx = ga_instance.best_solution()
     print(f"Parameters of the best solution : {solution}")
     print(f"Fitness value of the best solution = {solution_fitness}")
-    
 
-    # ========================================================================
-    # 5.2. TPE - Optuna - CatBoost
-    # ========================================================================
-    print(f"\n5.2 TPE - Optuna - CatBoost with \nGA selection: {solution}...")
+    print(f"\nTPE - Optuna - CatBoost with \nGA selection: {solution}...")
     selected_indices = [i for i, bit in enumerate(solution) if bit == 1]
     filtered_val_probs = [gnns_val_probs[i] for i in selected_indices]
     filtered_test_probs = [gnns_test_probs[i] for i in selected_indices]
     print(f"Using {len(selected_indices)} models selected by GA for final Stacking.")
+    
+
+    # ========================================================================
+    # TPE - Optuna - CatBoost
+    # ========================================================================
     
     study = optuna.create_study(direction='maximize')
     study.optimize(lambda trial: catboost_objective(trial, data, filtered_val_probs), n_trials=n_trials)
@@ -522,7 +545,7 @@ def main(dataset_name):
     # ========================================================================
     # stacking ensemble model
     # ========================================================================
-    print("\n5.3 Stacking CatBoost...")
+    print("\nStacking CatBoost...")
     cat_test_preds, cat_test_probs = stacking_catboost(data, filtered_val_probs, filtered_test_probs, cat_best_params)
     cat_test_performance = eval_stacking_catboost(y_test, cat_test_preds, cat_test_probs)
     models_test_performance.append(cat_test_performance)

@@ -7,7 +7,7 @@ from sklearn.metrics import f1_score, accuracy_score, classification_report, roc
 
 # model
 from sklearn.ensemble import IsolationForest
-
+from pytorch_tabnet.tab_model import TabNetClassifier
 from catboost import CatBoostClassifier
 
 # Optimization
@@ -33,8 +33,8 @@ import argparse
 RANDOM_SEED = 24027277
 w_m_f1, w_c1_f1, w_auc = 0.4, 0.5, 0.1
 n_trials=50
-epochs=200
-
+epochs=1000
+MIN_GA_MODELS = 3
 # ==============================================================================
 # Genetic Algorithm
 # https://pygad.readthedocs.io/en/latest/
@@ -44,7 +44,9 @@ def fitness_func(ga_instance, solution, solution_idx,
 
     selected_cols = np.where(solution == 1)[0]
 
-    if len(selected_cols) == 0: return 0
+    # if len(selected_cols) == 0: return 0
+    if len(selected_cols) < MIN_GA_MODELS:
+        return 0
     
     ga_train_mask = (val_ts < split_threshold)
     ga_val_mask = (val_ts >= split_threshold)
@@ -60,18 +62,33 @@ def fitness_func(ga_instance, solution, solution_idx,
     X_train_final = np.hstack([X_ga_train_raw, X_ga_train_meta])
     X_val_final = np.hstack([X_ga_val_raw, X_ga_val_meta])
 
-    clf = CatBoostClassifier(
-        iterations=20,
-        learning_rate=0.1,
-        depth=5,
-        bootstrap_type='Bernoulli',
-        subsample=0.8,
-        # task_type='GPU'
-        # devices='0',
-        silent=True,
-        allow_writing_files=False
+    # cat = CatBoostClassifier(
+    #     iterations=epochs,
+    #     loss_function='Logloss',
+    #     eval_metric='AUC',
+    #     early_stopping_rounds=(epochs*0.2),
+    #     random_seed=RANDOM_SEED,
+    #     auto_class_weights='Balanced',
+
+    #     # randome select 80% data
+    #     bootstrap_type='Bernoulli',
+    #     subsample=0.8,
+    #     learning_rate=0.03,
+    #     depth=4,
+    #     l2_leaf_reg=10,
+    #     silent=True,
+    #     allow_writing_files=False,
+    # )
+    clf = TabNetClassifier(
+        optimizer_fn=torch.optim.AdamW,
+        optimizer_params=dict(lr=2e-2),
+        scheduler_params={"step_size":10, "gamma":0.9},
+        scheduler_fn=torch.optim.lr_scheduler.StepLR,
+        verbose=0,
+        device_name='cuda' 
     )
-    clf.fit(X_train_final, y_ga_train)
+
+    clf.fit(X_train_final, y_ga_train, eval_set=[(X_val_final, y_ga_val)])
     
     preds = clf.predict(X_val_final)
     probs = clf.predict_proba(X_val_final)[:, 1]
@@ -87,58 +104,99 @@ def fitness_func(ga_instance, solution, solution_idx,
 # TPE - Optuna
 # ==============================================================================
 
-def catboost_objective(trial, data, gnns_val_probs):
-    """Optuna objective function for CatBoost model optimization"""
+def meta_objective(trial, data, gnns_val_probs):
+    """Optuna objective function for meta model optimization"""
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate
     X_val_raw_meta = np.hstack([data.x[data.val_mask].numpy(), X_val_meta])
     y_val = data.y[data.val_mask].numpy()
-    print(f"X_val_meta shape: {X_val_meta.shape}")
-    print(f"X_val_final shape: {X_val_raw_meta.shape}")
+    # print(f"X_val_meta shape: {X_val_meta.shape}")
+    # print(f"X_val_final shape: {X_val_raw_meta.shape}")
     X_tr, X_ev, y_tr, y_ev = train_test_split(X_val_raw_meta, y_val, test_size=0.25, random_state=RANDOM_SEED)
 
     # Define search space
-    # iterations = trial.suggest_int('iterations', 100, 500, step=100)
-    iterations = 500
-    learning_rate = trial.suggest_float('learning_rate', 1e-3, 0.5, log=True)
-    depth = trial.suggest_int('depth', 4, 10)
-    l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 1e-2, 10.0, log=True)
-    cat = CatBoostClassifier(
-        iterations,
-        learning_rate,
-        depth,
-        l2_leaf_reg,
-        loss_function='Logloss',
-        eval_metric='F1',
-        task_type='GPU',
-        devices='0',
-        early_stopping_rounds=30,
-        random_seed=RANDOM_SEED,
-        auto_class_weights='Balanced',
-        verbose=100,
+    # iterations = 500
+    # learning_rate = trial.suggest_float('learning_rate', 1e-3, 0.5, log=True)
+    # depth = trial.suggest_int('depth', 4, 10)
+    # l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 1e-2, 10.0, log=True)
+
+    # cat = CatBoostClassifier(
+    #     iterations=epochs,
+    #     loss_function='Logloss',
+    #     eval_metric='F1',
+    #     early_stopping_rounds=(epochs*0.2),
+    #     random_seed=RANDOM_SEED,
+    #     auto_class_weights='Balanced',
+
+    #     # randome select 80% data
+    #     bootstrap_type='Bernoulli',
+    #     subsample=0.8,
+    #     learning_rate=learning_rate,
+    #     depth=depth,
+    #     l2_leaf_reg=l2_leaf_reg,
+    #     silent=True,
+    #     allow_writing_files=False,
+    # )
+    # clf.fit(X_tr, y_tr, eval_set=(X_ev, y_ev))
+
+    n_d = trial.suggest_categorical('n_d', [8, 16, 32, 64])
+    n_a = n_d 
+    n_steps = trial.suggest_int('n_steps', 3, 5)
+    tabnet_gamma = trial.suggest_float('tabnet_gamma', 1.0, 1.5)
+    lambda_sparse = trial.suggest_float('lambda_sparse', 1e-4, 1e-2, log=True)
+    
+    lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
+    weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-2, log=True)
+    scheduler_gamma = trial.suggest_float('scheduler_gamma', 0.1, 0.9)
+    mask_type = trial.suggest_categorical('mask_type', ['entmax', 'sparsemax'])
+
+    clf = TabNetClassifier(
+        n_d=n_d, n_a=n_a,
+        n_steps=n_steps,
+        gamma=tabnet_gamma,
+        lambda_sparse=lambda_sparse,
+        optimizer_fn=torch.optim.AdamW,
+        optimizer_params=dict(lr=lr, weight_decay=weight_decay),
+        scheduler_fn=torch.optim.lr_scheduler.StepLR,
+        scheduler_params={
+            "step_size": 10,
+            "gamma": scheduler_gamma
+        },
+        mask_type=mask_type,
+        verbose=0,
+        device_name='cuda' 
     )
 
-    cat.fit(X_tr, y_tr)
+    clf.fit(
+        X_train=X_tr, y_train=y_tr,
+        eval_set=[(X_ev, y_ev)],
+        eval_name=['val'],
+        eval_metric=['balanced_accuracy', 'auc'],
+        max_epochs=epochs,
+        patience=epochs*0.2
+    )
 
-    test_preds = cat.predict(X_ev)
-    test_probs = cat.predict_proba(X_ev)[:, 1]
-    model_val_performance = eval_stacking_catboost(y_ev, test_preds, test_probs)
+    clf.fit(X_tr, y_tr, eval_set=[(X_ev, y_ev)])
+
+    test_preds = clf.predict(X_ev)
+    test_probs = clf.predict_proba(X_ev)[:, 1]
+    model_val_performance = eval_stacking_ensemble(y_ev, test_preds, test_probs)
 
     auc = model_val_performance['auc'] 
     prec = model_val_performance['class 1 precision']
     recall = model_val_performance['class 1 recall']
     f1 = model_val_performance['class 1 f1-score']
 
-    if auc < 0.6 or prec < 0.5 or recall < 0.5:
-        print("auc < 0.6 or prec < 0.5 or recall < 0.5")
+    if auc < 0.9 or prec < 0.5 or recall < 0.5:
+        print("="*60, "auc < 0.6 or prec < 0.5 or recall < 0.5", "="*60)
         return 0.0 + (auc * 0.01)
 
     refined_score = f1
 
-    if prec < 0.8:
-        print("prec < 0.8")
+    if prec < 0.9:
+        print("="*60, "prec < 0.9", "="*60)
         refined_score *= 0.5  
-    if recall < 0.8:
-        print("recall < 0.8")
+    if recall < 0.6:
+        print("="*60, "recall < 0.6", "="*60)
         refined_score *= 0.5 
 
     return refined_score
@@ -156,7 +214,7 @@ def isolation_forest_baseline(data):
     y_test = data.y[data.test_mask].numpy()
 
     # Train Isolation Forest
-    clf = IsolationForest(random_state=24027277, contamination=0.05)
+    clf = IsolationForest(random_state=RANDOM_SEED, contamination=0.05)
     clf.fit(X_train)
 
     # Predict: 1=normal, -1=anomaly
@@ -315,15 +373,15 @@ def train_and_test_gnn(model_name, data, device, best_params=None):
      
 
 # ==============================================================================
-# Catboost Model - stacking
+# Stacking Ensemble
 # ==============================================================================
 
-def eval_stacking_catboost(y_test, test_preds, test_probs):
+def eval_stacking_ensemble(y_test, test_preds, test_probs):
      ## preformance metrics
     test_report = classification_report(y_test, test_preds, zero_division=0, output_dict=True)
     test_auc = roc_auc_score(y_test, test_probs)
     model_test_performance = {
-        'model': 'CatBoost_Stacking',
+        'model': 'Stacking_Ensemble',
         'class 1 precision': test_report['1']['precision'],
         'class 1 recall': test_report['1']['recall'],
         'class 1 f1-score': test_report['1']['f1-score'],
@@ -339,46 +397,79 @@ def eval_stacking_catboost(y_test, test_preds, test_probs):
     return model_test_performance
 
 
-def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params=None):
+def stacking_ensemble(data, gnns_val_probs, gnns_test_probs, best_params={}):
     ## process meta data
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate
     X_test_meta = np.hstack(gnns_test_probs)
-    print(f"X_val_meta shape: {X_val_meta.shape}, X_test_meta shape: {X_test_meta.shape}")
+    # print(f"X_val_meta shape: {X_val_meta.shape}, X_test_meta shape: {X_test_meta.shape}")
 
     X_val_raw_meta = np.hstack([data.x[data.val_mask].numpy(), X_val_meta])
     X_test_raw_meta = np.hstack([data.x[data.test_mask].numpy(), X_test_meta])
-    print(f"X_val_final shape: {X_val_raw_meta.shape}, X_test_final shape: {X_test_raw_meta.shape}")
+    # print(f"X_val_final shape: {X_val_raw_meta.shape}, X_test_final shape: {X_test_raw_meta.shape}")
+
+    y_val = data.y[data.val_mask].numpy()
 
     # Extract best parameters or use defaults
-    iterations = epochs
-    learning_rate = best_params.get('learning_rate', 0.05)
-    depth = best_params.get('depth', 4)
-    l2_leaf_reg = best_params.get('l2_leaf_reg', 3.0)
+    # iterations = epochs
+    # learning_rate = best_params.get('learning_rate', 0.03)
+    # depth = best_params.get('depth', 4)
+    # l2_leaf_reg = best_params.get('l2_leaf_reg', 10.0)
 
     ## create catboost model and train and predict
-    cat = CatBoostClassifier(
-        iterations=iterations,
-        learning_rate=learning_rate,
-        depth=depth,
-        l2_leaf_reg=l2_leaf_reg,
-        loss_function='Logloss',
-        eval_metric='F1',
-        task_type='GPU',
-        devices='0',
-        early_stopping_rounds=30,
-        random_seed=RANDOM_SEED,
-        auto_class_weights='Balanced',
-        verbose=100,
+    # cat = CatBoostClassifier(
+    #     iterations=iterations,
+    #     learning_rate=learning_rate,
+    #     depth=depth,
+    #     l2_leaf_reg=l2_leaf_reg,
+    #     loss_function='Logloss',
+    #     eval_metric='F1',
+    #     task_type='GPU',
+    #     devices='0',
+    #     # early_stopping_rounds=30,
+    #     random_seed=RANDOM_SEED,
+    #     auto_class_weights='Balanced',
+    #     verbose=100,
+    # )
+    # print(cat.get_params())
+
+    n_d = best_params.get('n_d', 8)
+    n_a = n_d 
+    n_steps = best_params.get('n_steps', 3)
+    tabnet_gamma = best_params.get('tabnet_gamma', 1.3)
+    lambda_sparse = best_params.get('lambda_sparse', 1e-3)
+    
+    lr = best_params.get('lr', 2e-2)
+    weight_decay = best_params.get('weight_decay', 1e-5)
+    scheduler_gamma = best_params.get('scheduler_gamma', 0.9)
+    mask_type = best_params.get('mask_type', 'sparsemax')
+
+    clf = TabNetClassifier(
+        n_d=n_d, n_a=n_a,
+        n_steps=n_steps,
+        gamma=tabnet_gamma,
+        lambda_sparse=lambda_sparse,
+        optimizer_fn=torch.optim.AdamW,
+        optimizer_params=dict(lr=lr, weight_decay=weight_decay),
+        scheduler_fn=torch.optim.lr_scheduler.StepLR,
+        scheduler_params={
+            "step_size": 10,
+            "gamma": scheduler_gamma
+        },
+        mask_type=mask_type,
+        verbose=0,
+        device_name='cuda' 
     )
-    print(cat.get_params())
 
-    # fit val data, 
-    # predict test data
-    y_val = data.y[data.val_mask].numpy()
-    cat.fit(X_val_raw_meta, y_val)
+    clf.fit(
+        X_train=X_val_raw_meta, y_train=y_val,
+        # eval_name=['val'],
+        eval_metric=['balanced_accuracy', 'auc'],
+        max_epochs=epochs,
+        patience=epochs*0.2
+    )
 
-    test_preds = cat.predict(X_test_raw_meta)
-    test_probs = cat.predict_proba(X_test_raw_meta)[:, 1]
+    test_preds = clf.predict(X_test_raw_meta)
+    test_probs = clf.predict_proba(X_test_raw_meta)[:, 1]
 
     return test_preds, test_probs
 
@@ -387,7 +478,7 @@ def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params=None):
 # Main - Execute complete GNN anomaly detection  
 # ==============================================================================
 def main(dataset_name):
-    print("=" * 60, "\nBlockchain Anomaly Detection GNN Framework\n", "=" * 60)
+    print("=" * 60, "\nBlockchain Anomaly Detection GNN Framework\n", "=" * 60, "202603280909")
 
 
     # Set device
@@ -462,14 +553,14 @@ def main(dataset_name):
 
 
     # ========================================================================
-    # training CatBoost
+    # training 
     # GA select model
-    # TPE - Optuna optimal catboost hyperparameter
-    # Stacking CatBoost
+    # TPE - Optuna 
+    # Stacking 
     # ========================================================================
     # GA
     # ========================================================================
-    print("\n5.1. GA Crossover model...")
+    print("\nGA Crossover model...")
     X_val_raw = data.x[data.val_mask].numpy()
     val_ts = None
     if 'e1' in dataset_name:
@@ -486,10 +577,10 @@ def main(dataset_name):
     )
     print('gnn models length:', len(gnn_models_list))
     ga_instance = pygad.GA(
-        num_generations=50, 
+        num_generations=10, 
+        sol_per_pop=10, 
         num_parents_mating=5, 
         fitness_func=bound_fitness,
-        sol_per_pop=50, 
         num_genes=len(gnn_models_list),
         parent_selection_type='tournament',
         crossover_type="two_points",
@@ -502,32 +593,33 @@ def main(dataset_name):
     solution, solution_fitness, solution_idx = ga_instance.best_solution()
     print(f"Parameters of the best solution : {solution}")
     print(f"Fitness value of the best solution = {solution_fitness}")
-    
 
-    # ========================================================================
-    # 5.2. TPE - Optuna - CatBoost
-    # ========================================================================
-    print(f"\n5.2 TPE - Optuna - CatBoost with \nGA selection: {solution}...")
+    print(f"\nTPE - Optuna - meta with \nGA selection: {solution}...")
     selected_indices = [i for i, bit in enumerate(solution) if bit == 1]
     filtered_val_probs = [gnns_val_probs[i] for i in selected_indices]
     filtered_test_probs = [gnns_test_probs[i] for i in selected_indices]
     print(f"Using {len(selected_indices)} models selected by GA for final Stacking.")
     
+
+    # ========================================================================
+    # TPE - Optuna - meta model
+    # ========================================================================
+    
     study = optuna.create_study(direction='maximize')
-    study.optimize(lambda trial: catboost_objective(trial, data, filtered_val_probs), n_trials=n_trials)
-    best_trial = study.best_trial
-    cat_best_params = best_trial.params
-    print(f"Best hyperparameters - CatBoost: {cat_best_params}")
+    study.optimize(lambda trial: meta_objective(trial, data, filtered_val_probs), n_trials=n_trials)
+    # best_trial = 
+    meta_best_params = study.best_trial.params
+    print(f"Best hyperparameters - meta: {meta_best_params}")
    
     # ========================================================================
     # stacking ensemble model
     # ========================================================================
-    print("\n5.3 Stacking CatBoost...")
-    cat_test_preds, cat_test_probs = stacking_catboost(data, filtered_val_probs, filtered_test_probs, cat_best_params)
-    cat_test_performance = eval_stacking_catboost(y_test, cat_test_preds, cat_test_probs)
-    models_test_performance.append(cat_test_performance)
-    df_cat_preformance = pd.DataFrame([cat_test_performance])
-    final_df_test_results = pd.concat([df_baseline_results, df_test_results, df_cat_preformance], ignore_index=True)
+    print("\nStacking Ensemble...")
+    meta_test_preds, meta_test_probs = stacking_ensemble(data, filtered_val_probs, filtered_test_probs, meta_best_params)
+    meta_test_performance = eval_stacking_ensemble(y_test, meta_test_preds, meta_test_probs)
+    models_test_performance.append(meta_test_performance)
+    df_meta_preformance = pd.DataFrame([meta_test_performance])
+    final_df_test_results = pd.concat([df_baseline_results, df_test_results, df_meta_preformance], ignore_index=True)
     print("\n", "="*60, "\n", final_df_test_results)
 
     # ========================================================================

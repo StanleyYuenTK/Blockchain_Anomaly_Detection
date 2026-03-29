@@ -106,14 +106,17 @@ def MixHop_Model(best_params=None):
         
         (MixHopConv(in_channels, hidden_channels, powers=powers), 'x, edge_index -> x'),
         (BatchNorm(current_dim), 'x -> x'),
+        (ReLU(inplace=True), 'x -> x'),
         (Dropout(p=dropout), 'x -> x'),
         
         (MixHopConv(current_dim, hidden_channels, powers=powers), 'x, edge_index -> x'),
         (BatchNorm(current_dim), 'x -> x'),
+        (ReLU(inplace=True), 'x -> x'),
         (Dropout(p=dropout), 'x -> x'),
 
         (MixHopConv(current_dim, hidden_channels, powers=powers), 'x, edge_index -> x'),
         (BatchNorm(current_dim), 'x -> x'),
+        (ReLU(inplace=True), 'x -> x'),
         (Dropout(p=dropout), 'x -> x'),
 
         (Linear(current_dim, out_channels), 'x -> x'),

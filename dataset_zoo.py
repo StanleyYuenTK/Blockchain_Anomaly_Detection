@@ -14,7 +14,7 @@ from community import community_louvain
 from sklearn.preprocessing import StandardScaler
 
 import argparse
-
+from torch_geometric.utils import to_networkx
 
 RANDOM_SEED = 24027277
 
@@ -45,6 +45,17 @@ def get_degree_features(edge_index, num_nodes):
     ], dim=1)
 
 
+def get_standard_scaler(data):
+    scaler = StandardScaler()
+    x_numpy = data.x
+    scaler.fit(x_numpy[data.train_mask]) # 記住咗 Train Set 的 Mean 同 Std
+    return scaler.transform(x_numpy)  # Fit and transform
+    
+
+
+# ========================
+# Louvain Features
+# ========================
 def get_louvain_features(edge_index, num_nodes, labels=None, train_mask=None, resolution=1.0):
     # Build graph using NetworkX (undirected)
     G = nx.Graph()
@@ -101,16 +112,42 @@ def get_louvain_features(edge_index, num_nodes, labels=None, train_mask=None, re
         louvain_feat[i, 2] = 1.0 if illicit_cnt > 0 else 0.0   # Has illicit flag
         louvain_feat[i, 3] = internal_deg[i] / (total_deg[i] + 1e-8)  # Internal degree ratio
         louvain_feat[i, 4] = internal_deg[i] / (size)          # Average internal degree
+
+    print("louvain_feat:\n", louvain_feat)
     
     return louvain_feat, partition
 
 
-def get_standard_scaler(data):
-    scaler = StandardScaler()
-    x_numpy = data.x
-    scaler.fit(x_numpy[data.train_mask]) # 記住咗 Train Set 的 Mean 同 Std
-    return scaler.transform(x_numpy)  # Fit and transform
+def get_guilt_by_association_feature(edge_index, num_nodes, labels, train_mask):
+    """
+    計算反向度數加權的連坐特徵 (Guilt-by-Association)
+    """
+    row, col = edge_index
+    # 取得所有節點的度數
+    deg = degree(col, num_nodes, dtype=torch.float)
     
+    # 計算度數懲罰權重: 1 / log(1 + degree)
+    # 度數越大的節點(如交易所)，傳遞的嫌疑值越低
+    penalty_weight = 1.0 / torch.log1p(deg)
+    
+    # 準備 Train set 中的惡意標籤 (僅使用 train_mask 防止洩漏)
+    is_illicit = torch.zeros(num_nodes, dtype=torch.float)
+    train_mask_bool = train_mask.bool()
+    
+    # 假設 label 1 是 illicit
+    illicit_mask = (labels == 1) & train_mask_bool
+    is_illicit[illicit_mask] = 1.0
+    
+    # 將惡意標籤乘上該節點的懲罰權重
+    illicit_msg = is_illicit * penalty_weight
+    
+    # 透過 edge_index 將訊息傳遞給鄰居 (Message Passing)
+    # 這裡計算的是 In-Degree 方向的惡意影響
+    guilt_feature = torch_scatter.scatter_add(illicit_msg[row], col, dim=0, dim_size=num_nodes)
+    
+    return guilt_feature.view(-1, 1)
+
+
 
 # =========================================================================================
 # Elliptic dataset
@@ -176,6 +213,9 @@ def process_elliptic_data(dataset_dir='Dataset/elliptic dataset'):
     print("Louvain features...")
     louvain_features, partition = get_louvain_features(data.edge_index, data.x.size(0), labels=data.y, train_mask=data.train_mask)
 
+    print("illict features...")
+    
+
     print("combine features to data.x...")
     data.x = torch.cat([data.x, pagerank_features, degree_features, louvain_features], dim=1)
     print(f"Total features: {data.x.size(1)} dimensions")
@@ -188,6 +228,66 @@ def process_elliptic_data(dataset_dir='Dataset/elliptic dataset'):
 
     # 8. Save processed data
     torch.save(data, dataset_dir+'/elliptic_processed_data.pt')
+
+def process_elliptic_data_noL(dataset_dir='Dataset/elliptic dataset'):
+    print("\n1. Processing Elliptic dataset...")
+
+    # 1. load data -------------------------------
+    classes_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_classes.csv'))
+    edgelist_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_edgelist.csv'))
+    features_df = pd.read_csv(os.path.join(dataset_dir, 'elliptic_txs_features.csv'), header=None)
+
+    # 2. colA is id, colB is time steps -------------------------------
+    # features without hearder, so we assign column names first for merge
+    features_df.columns = ['txId', 'timestep'] + [f'feat_{i}' for i in range(2, features_df.shape[1])]
+    
+    # 3. merge features and classes to become a nodes -------------------------------
+    nodes_df = pd.merge(features_df, classes_df, on='txId', how='left')
+    
+    # 4. process features and labels and edges for push into PyG data object -------------------------------
+    # class 2 = licit, class 1 = illicit, unknown -> -1
+    y = torch.tensor(nodes_df['class'].map({'2': 0, '1': 1}).fillna(-1).values, dtype=torch.long)
+
+    # get x without txId, timestep and target(class), 
+    # since my model not need time to learn, so we drop them
+    x = torch.tensor(nodes_df.iloc[:, 2:-1].values, dtype=torch.float)
+
+    tx_id_map = {tx_id: i for i, tx_id in enumerate(nodes_df['txId'])}
+    edge_index_src = edgelist_df.iloc[:, 0].map(tx_id_map)
+    edge_index_tgt = edgelist_df.iloc[:, 1].map(tx_id_map)
+    edges = pd.concat([edge_index_src, edge_index_tgt], axis=1).astype(int)
+    edge_index = torch.tensor(edges.values.T, dtype=torch.long)
+
+    # 6. New Data and create Mask -------------------------------
+    data = Data(x=x, y=y, edge_index=edge_index)
+    data.timesteps = torch.tensor(nodes_df['timestep'].values, dtype=torch.long)
+    data.train_mask = (data.timesteps < 35) & (y != -1)
+    data.val_mask   = (data.timesteps >= 35) & (data.timesteps < 42) & (y != -1)
+    data.test_mask  = (data.timesteps >= 42) & (y != -1)
+    # print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
+
+    # 7. feature engineering - pagerank, degree, louvain -------------------------------
+    print("PageRank features...")
+    pagerank_features = get_pagerank_features(data.edge_index, data.x.size(0))
+
+    print("Degree features...")
+    degree_features = get_degree_features(data.edge_index, data.x.size(0))
+
+    # print("Louvain features...")
+    # louvain_features, partition = get_louvain_features(data.edge_index, data.x.size(0), labels=data.y, train_mask=data.train_mask)
+
+    print("combine features to data.x...")
+    data.x = torch.cat([data.x, pagerank_features, degree_features], dim=1)
+    print(f"Total features: {data.x.size(1)} dimensions")
+
+    # 7. StandardScaler ----------------------------------------------------
+    print("\nStandardScaler...")
+    x_scaled = get_standard_scaler(data)
+    data.x = torch.tensor(x_scaled, dtype=torch.float)
+    print(f"StandardScaler done...\nTotal features: {data.x.size(1)} dimensions")
+
+    # 8. Save processed data
+    torch.save(data, dataset_dir+'/elliptic_processed_data_noL.pt')
 
 def eda_elliptic(dataset_dir='Dataset/elliptic dataset'):
     # 1. load data
@@ -236,8 +336,11 @@ def eda_elliptic(dataset_dir='Dataset/elliptic dataset'):
     y = torch.tensor(nodes_df['label_class'].values, dtype=torch.long)
     print(y)
 
-def load_elliptic_data(fname='Dataset/elliptic dataset/elliptic_processed_data.pt'):
-    print("\n1. Loading Elliptic dataset...")
+def load_elliptic_data(fname='Dataset/elliptic dataset/elliptic_processed_data.pt', ver=''):
+    if ver == 'nol':
+        fname = 'Dataset/elliptic dataset/elliptic_processed_data_noL.pt'
+
+    print(f"\n1. Loading Elliptic dataset {ver}...")
 
     data = torch.load(fname, weights_only=False)
     print(data.train_mask.sum()) 
@@ -362,6 +465,114 @@ def process_ethereum_data(dataset_dir='Dataset/ethereum dataset'):
     # 8. Save processed data
     torch.save(data, dataset_dir + '/subgraph_ethereum_processed_data.pt')
 
+def process_ethereum_data_noL(dataset_dir='Dataset/ethereum dataset'):
+    print("\n1. Processing Ethereum dataset...")
+    # 1. load data
+    G = load_pickle(dataset_dir+'/MulDiGraph.pkl')
+
+    # 2. get phishing nodes for subgraph sampling
+    phishing_nodes = [n for n, attr in G.nodes(data=True) if attr.get('isp') == 1]
+
+    # get 1-hop neighbours of phishing nodes
+    subgraph_nodes = set(phishing_nodes)
+    for node in phishing_nodes:
+        subgraph_nodes.update(G.neighbors(node))
+
+    S = G.subgraph(subgraph_nodes).copy()
+
+    # 2. process nodes
+    node_mapping = {}
+    y_list = []
+    x_np = np.zeros((S.number_of_nodes(), 12), dtype=np.float32)
+    for i, (n, attr) in enumerate(S.nodes(data=True)):
+        # node_mapping for edge_index construction later
+        node_mapping[n] = i
+
+        # X extract the nodes and edges for the graph
+        # out-degree, in-degree, average degree, total degree, 
+        # average sending amount, total sending amount, maximumsending amount, 
+        # average receiving amount, total receiving amount, maximum receiving amount, 
+        # transaction time interval ratio, and the total number of neighbors
+        # --- Degree ---
+        in_d = S.in_degree(n)
+        out_d = S.out_degree(n)
+        t_send, m_send, t_recv, m_recv = 0, 0, 0, 0
+        all_ts = []
+        
+        for _, _, d in S.in_edges(n, data=True):
+            amt = d.get('amount', 0)
+            t_recv += amt
+            if amt > m_recv: m_recv = amt
+            all_ts.append(d.get('timestamp', 0))
+            
+        for _, _, d in S.out_edges(n, data=True):
+            amt = d.get('amount', 0)
+            t_send += amt
+            if amt > m_send: m_send = amt
+            all_ts.append(d.get('timestamp', 0))
+
+        # Time Ratio
+        if len(all_ts) > 1:
+            all_ts.sort()
+            t_ratio = (all_ts[-1] - all_ts[0]) / len(all_ts)
+        else:
+            t_ratio = 0
+            
+        x_np[i] = [
+            in_d, out_d, (in_d+out_d)/2, in_d+out_d,
+            t_send/out_d if out_d > 0 else 0, t_send, m_send,
+            t_recv/in_d if in_d > 0 else 0, t_recv, m_recv,
+            t_ratio, len(list(S.neighbors(n)))
+        ]
+
+        # y extract the labels for the nodes
+        y_list.append(attr.get("isp", 0))  # 默認為 0 (non-phishing) 如果沒有 isp 屬性
+
+    y = torch.tensor(y_list, dtype=torch.long)
+    x = torch.from_numpy(x_np)
+    x = torch.log(x + 1)
+
+
+    # 3. process edges
+    num_edges = S.number_of_edges()
+    edges_np = np.zeros((num_edges, 2), dtype=np.int64)
+    edge_attr_np = np.zeros((num_edges, 2), dtype=np.float32)
+    for i, (u, v, attr) in enumerate(S.edges(data=True)):
+        edges_np[i] = [node_mapping[u], node_mapping[v]]
+        edge_attr_np[i] = [attr.get('amount', 0), attr.get('timestamp', 0)]
+    edge_index = torch.from_numpy(edges_np).t().contiguous()
+    edge_attr = torch.from_numpy(edge_attr_np)
+
+    # 5. New Data ----------------------------------------------------
+    data = Data(x=x, y=y, edge_index=edge_index, edge_attr=edge_attr)
+    data.train_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+    data.val_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+    data.test_mask = torch.zeros(data.num_nodes, dtype=torch.bool)
+    data.train_mask[:int(data.num_nodes * 0.6)] = True
+    data.val_mask[int(data.num_nodes * 0.6):int(data.num_nodes * 0.8)] = True
+    data.test_mask[int(data.num_nodes * 0.8):] = True
+    print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
+    
+    # 7. feature engineering - pagerank, degree, louvain -------------------------------
+    print("PageRank features...")
+    pagerank_features = get_pagerank_features(data.edge_index, data.x.size(0))
+
+    # 6. Louvain ----------------------------------------------------
+    # print("Louvain features...")
+    # louvain_features, partition = get_louvain_features(data.edge_index, data.x.size(0), labels=data.y, train_mask=data.train_mask)
+    
+    data.x = torch.cat([data.x, pagerank_features], dim=1)
+    print(f"Total features: {data.x.size(1)} dimensions")
+
+    # 7. StandardScaler ----------------------------------------------------
+    print("\nStandardScaler...")
+    x_scaled = get_standard_scaler(data)
+    data.x = torch.tensor(x_scaled, dtype=torch.float)
+    print(f"StandardScaler done...\nTotal features: {data.x.size(1)} dimensions")
+
+    # 8. Save processed data
+    torch.save(data, dataset_dir + '/subgraph_ethereum_processed_data_noL.pt')
+
 def eda_ethereum(dataset_dir='Dataset/ethereum dataset'):
     print("\n1. EDA Ethereum dataset...")
     # 1. load data
@@ -443,9 +654,11 @@ def eda_ethereum(dataset_dir='Dataset/ethereum dataset'):
     plt.tight_layout()
     plt.show()
 
+def load_ethereum_data(fname='Dataset/ethereum dataset/subgraph_ethereum_processed_data.pt', ver=''):
+    if ver == 'nol':
+        fname = 'Dataset/ethereum dataset/subgraph_ethereum_processed_data_noL.pt'
 
-def load_ethereum_data(fname='Dataset/ethereum dataset/subgraph_ethereum_processed_data.pt'):
-    print("\n1. Loading Ethereum dataset...")
+    print(f"\n1. Loading Ethereum dataset {ver}...")
 
     data = torch.load(fname, weights_only=False)
     print(data.train_mask.sum()) 
@@ -454,14 +667,96 @@ def load_ethereum_data(fname='Dataset/ethereum dataset/subgraph_ethereum_process
     
     return data
 
+
+
+def visualize_blockchain_communities(G, partition, labels=None, node=2):
+
+    G_sub = G
+    
+    # 2. 準備佈局 (Layout)
+    # k 控制節點間距，iterations 增加佈局穩定度
+    pos = nx.spring_layout(G_sub, k=0.15, seed=42, iterations=50)
+    
+    # 3. 準備顏色與數據
+    community_ids = [partition.get(node, -1) for node in G_sub.nodes()]
+    num_communities = len(set(community_ids))
+    
+    fig, ax = plt.subplots(figsize=(16, 10))
+    
+    # 4. 繪製邊 (設定透明度以免干擾視覺)
+    nx.draw_networkx_edges(G_sub, pos, edge_color='gray', ax=ax)
+    # nx.draw_networkx_labels(G, pos, font_size=12, font_color="black")
+
+    
+    # 5. 繪製節點 (依據社群 ID 上色)
+    im = nx.draw_networkx_nodes(
+        G_sub, pos, 
+        node_size=80, 
+        node_color=community_ids, 
+        cmap='jet', 
+        ax=ax
+    )
+    
+    # 6. [進階創新] 高亮顯示異常節點 (用紅色外框或 X 標記)
+    if labels is not None:
+        # 假設 labels 中 1 代表 illicit (異常)
+        illicit_nodes = [n for n in G_sub.nodes() if labels.get(n) == 1]
+        nx.draw_networkx_nodes(
+            G_sub, pos, 
+            nodelist=illicit_nodes,
+            node_size=120,
+            node_color='none',
+            edgecolors='red', # 紅色外框
+            linewidths=2,
+            label='Illicit Nodes',
+            ax=ax
+        )
+
+    # 7. 細節調整
+    plt.colorbar(im, label='Community ID')
+    ax.set_title(f"Blockchain Community Detection (Detected {num_communities} Communities)")
+    ax.axis('off')
+    
+    # 加上 Legend (如果 labels 存在)
+    if labels is not None:
+        plt.legend(scatterpoints=1)
+    
+    save_path=f"crime/crime_graph_analysis_{node}.png"
+    plt.savefig(save_path, dpi=100, bbox_inches='tight')
+    plt.close(fig) # 釋放記憶體
+    print(f"✅ 可視化結果已儲存至: {save_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Blockchain Anomaly Detection with GNNs')
     parser.add_argument('dataset', type=str,help='Pleaese select dataset: e1 or e2')
     args = parser.parse_args()
     if args.dataset == "e1":
         process_elliptic_data()
-    elif  args.dataset == "e2":
+    
+    elif args.dataset == "e1nol":
+        process_elliptic_data_noL()
+    elif args.dataset == "e1G":
+        data = load_elliptic_data()
+        G_nx = to_networkx(data, to_undirected=True)
+        node_labels = {i: int(data.y[i].item()) for i in range(data.num_nodes)}
+        louvain_features, partition = get_louvain_features(data.edge_index, data.num_nodes, data.y, data.train_mask)   
+        illicit_nodes = [n for n in G_nx.nodes() if node_labels.get(n) == 1]
+        if len(illicit_nodes) > 0:
+            for node in range(len(illicit_nodes)):
+                # 我們選取第一個非法節點作為中心
+                target_node = illicit_nodes[node] 
+                print(f"Generating Ego Graph for Illicit Node: {target_node}")
+                # 抓取 2 層鄰居
+                ego_nodes = nx.single_source_shortest_path_length(G_nx, target_node, cutoff=2).keys()
+                G_ego = G_nx.subgraph(ego_nodes)
+                visualize_blockchain_communities(G_ego, partition=partition, labels=node_labels, node=node)
+                print("done")
+
+    if args.dataset == "e2":
         process_ethereum_data()
-# 
+    elif args.dataset == "e2nol":
+        process_ethereum_data_noL()
+#  
 # eda_ethereum()
 # subgraph_process()
