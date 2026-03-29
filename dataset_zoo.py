@@ -1,3 +1,11 @@
+"""
+The Hong Kong Polytechnic University
+Student ID: 24027277d
+Name: Yuen Tsz Ki
+
+Used to process dataset.
+"""
+
 import os
 import argparse
 
@@ -12,7 +20,7 @@ import networkx as nx
 import torch
 from torch_geometric.data import Data
 import torch_scatter
-from torch_geometric.utils import degree, get_ppr, to_networkx
+from torch_geometric.utils import degree, get_ppr
 from community import community_louvain
 from sklearn.preprocessing import StandardScaler
 

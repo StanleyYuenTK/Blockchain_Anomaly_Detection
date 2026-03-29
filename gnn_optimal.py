@@ -1,19 +1,28 @@
+"""
+The Hong Kong Polytechnic University
+Student ID: 24027277d
+Name: Yuen Tsz Ki
+
+Use TPE to fine-tune each model and save the optimal parameters.
+"""
+
 import gc
+import json
+import argparse
+import inspect
+
 import torch
 from sklearn.metrics import classification_report, roc_auc_score, f1_score
-import json
-import optuna
 
-# GNN Models
-import inspect
-import gnn_zoo
+# dataset
 import dataset_zoo
 
-## Focal Loss https://kornia.readthedocs.io/en/latest/losses.html#kornia.losses.focal_loss
+# GNN Models
+import gnn_zoo
+
+# optimal
+import optuna
 from kornia.losses import FocalLoss
-import argparse
-import copy
-import pandas as pd
 
 
 RANDOM_SEED = 24027277

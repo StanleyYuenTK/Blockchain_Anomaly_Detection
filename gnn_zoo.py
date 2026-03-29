@@ -1,4 +1,11 @@
-## GNN model ZOO
+"""
+The Hong Kong Polytechnic University
+Student ID: 24027277d
+Name: Yuen Tsz Ki
+
+GNN ZOO
+"""
+
 from torch_geometric.nn import GAT, GCN, GIN, GraphSAGE, Sequential
 from torch_geometric.nn import APPNP, ChebConv, MixHopConv, BatchNorm
 

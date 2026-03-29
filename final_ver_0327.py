@@ -1,34 +1,40 @@
+"""
+The Hong Kong Polytechnic University
+Student ID: 24027277d
+Name: Yuen Tsz Ki
+
+main. 
+used to train GNN and testing GNN and then use GA to select GNN models for ensemble learning.
+"""
+
+import json
+import copy
+import argparse
+import inspect
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 import torch
-from sklearn.metrics import f1_score, accuracy_score, classification_report, roc_auc_score, recall_score, precision_score, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score, classification_report, roc_auc_score
+
+# dataset
+import dataset_zoo
 
 # model
 from sklearn.ensemble import IsolationForest
-
 from catboost import CatBoostClassifier
+import gnn_zoo
 
 # Optimization
 import optuna
 import pygad
 
-import json
-import copy
+## Focal Loss https://kornia.readthedocs.io/en/latest/losses.html#kornia.losses.focal_loss
+from kornia.losses import FocalLoss
 
 # visualiz
 from visualization_tools import plot_model_comparison
-
-# GNN Models
-import inspect
-import gnn_zoo
-import dataset_zoo
-
-## Focal Loss https://kornia.readthedocs.io/en/latest/losses.html#kornia.losses.focal_loss
-from kornia.losses import FocalLoss
-import argparse
-
 
 RANDOM_SEED = 24027277
 MIN_GA_MODELS = 2
