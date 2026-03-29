@@ -35,9 +35,11 @@ def get_degree_features(edge_index, num_nodes):
     # Calculate in/out degree
     out_deg = degree(edge_index[0], num_nodes)
     in_deg = degree(edge_index[1], num_nodes)
+    
+    # Total degree and ratio
     total_deg = in_deg + out_deg
     
-    # Log normalization
+    # Log normalization (handle power law)
     in_deg_log = torch.log1p(in_deg)
     out_deg_log = torch.log1p(out_deg)
     total_deg_log = torch.log1p(total_deg)
@@ -527,6 +529,7 @@ def eda_ethereum(dataset_dir='Dataset/ethereum dataset'):
     # 1. load data
     G = load_pickle(dataset_dir+'/MulDiGraph.pkl') 
 
+
     num_nodes = G.number_of_nodes()
     num_edges = G.number_of_edges()
     avg_degree = (2 * num_edges) / num_nodes
@@ -535,32 +538,63 @@ def eda_ethereum(dataset_dir='Dataset/ethereum dataset'):
     print(f"average degree: {avg_degree:.4f}")
 
     degrees = [d for n, d in G.degree()]
+    print(f"中位數度數: {np.median(degrees)}")
+    print(f"最大度數: {np.max(degrees)}")
+
 
     node_data = []
     for n, attr in G.nodes(data=True):
         node_data.append(attr)
     df_nodes = pd.DataFrame(node_data)
 
+    # --- 新增：檢索所有屬性欄位 ---
+    print("\n### 0. 欄位屬性 (Attributes/Columns) 檢索 ###")
+    
+    # 獲取節點屬性範例 (取第一個節點)
+    first_node = next(iter(G.nodes()))
+    node_keys = G.nodes[first_node].keys()
+    print(f"節點屬性 (Node Columns): {list(node_keys)}")
+    
+    # 獲取邊屬性範例 (取第一條邊)
+    if G.number_of_edges() > 0:
+        first_edge = next(iter(G.edges(data=True)))
+        edge_keys = first_edge[2].keys() # first_edge 為 (u, v, data_dict)
+        print(f"邊屬性 (Edge Columns): {list(edge_keys)}")
+    # --------------------------------
 
-    print("\n1. number of pishing...")
-    counts = df_nodes['isp'].value_counts()
-    probs = df_nodes['isp'].value_counts(normalize=True) * 100
-    dist_df = pd.DataFrame({'count': counts, '%': probs})
-    print(dist_df)
+    print("\n### 2. 節點屬性與標籤分佈 ###")
+    if 'isp' in df_nodes.columns:
+        counts = df_nodes['isp'].value_counts()
+        probs = df_nodes['isp'].value_counts(normalize=True) * 100
+        dist_df = pd.DataFrame({'數量': counts, '百分比 (%)': probs})
+        print(dist_df)
+    else:
+        print("警告：未在節點屬性中找到 'isp' 標籤。")
 
-
-    print("\n2. missing value...")
+    # 3. 缺失值檢測 (Missing Data)
+    print("\n### 3. 屬性缺失值統計 ###")
     missing = df_nodes.isnull().sum()
-    print("missing", missing[missing > 0])
+    if missing.sum() > 0:
+        print(missing[missing > 0])
+    else:
+        print("所有節點屬性完整，無缺失值。")
 
+    # 4. 邊屬性分析 (EDA on Edges)
+    edge_amounts = [d.get('amount', 0) for _, _, d in G.edges(data=True)]
+    print("\n### 4. 邊權重 (Amount) 統計 ###")
+    print(pd.Series(edge_amounts).describe())
+
+    # 5. 可視化 (Visualization)
     fig, ax = plt.subplots(1, 2, figsize=(15, 6))
 
+    # 標籤比例柱狀圖
     if 'isp' in df_nodes.columns:
         sns.countplot(x='isp', data=df_nodes, ax=ax[0], palette='magma')
         ax[0].set_title('Phishing (1) vs Non-Phishing (0) Distribution')
         ax[0].set_yscale('log')
         ax[0].set_ylabel('Count (Log Scale)')
 
+    # 節點度數分佈圖 (Degree Distribution)
     degrees = [d for n, d in G.degree()]
     sns.histplot(degrees, bins=50, kde=True, ax=ax[1], color='blue')
     ax[1].set_title('Node Degree Distribution')
@@ -586,6 +620,54 @@ def load_ethereum_data(fname='Dataset/ethereum dataset/subgraph_ethereum_process
     return data
 
 
+# ==============================
+# visualize
+def visualize_blockchain_communities(G, partition, labels=None, node=2):
+
+    G_sub = G
+    pos = nx.spring_layout(G_sub, k=0.15, seed=42, iterations=50)
+    
+    community_ids = [partition.get(node, -1) for node in G_sub.nodes()]
+    num_communities = len(set(community_ids))
+    
+    fig, ax = plt.subplots(figsize=(16, 10))
+    
+    nx.draw_networkx_edges(G_sub, pos, edge_color='gray', ax=ax)
+    
+    im = nx.draw_networkx_nodes(
+        G_sub, pos, 
+        node_size=80, 
+        node_color=community_ids, 
+        cmap='jet', 
+        ax=ax
+    )
+    
+    if labels is not None:
+        illicit_nodes = [n for n in G_sub.nodes() if labels.get(n) == 1]
+        nx.draw_networkx_nodes(
+            G_sub, pos, 
+            nodelist=illicit_nodes,
+            node_size=120,
+            node_color='none',
+            edgecolors='red', # 紅色外框
+            linewidths=2,
+            label='Illicit Nodes',
+            ax=ax
+        )
+
+    plt.colorbar(im, label='Community ID')
+    ax.set_title(f"Blockchain Community Detection (Detected {num_communities} Communities)")
+    ax.axis('off')
+    
+    if labels is not None:
+        plt.legend(scatterpoints=1)
+    
+    save_path=f"crime/crime_graph_analysis_{node}.png"
+    plt.savefig(save_path, dpi=100, bbox_inches='tight')
+    plt.close(fig)
+    print(f"path: {save_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Blockchain Anomaly Detection with GNNs')
     parser.add_argument('dataset', type=str,help='Pleaese select dataset: e1 or e2')
@@ -596,7 +678,27 @@ if __name__ == "__main__":
     elif args.dataset == "e1nol":
         process_elliptic_data_noL()
 
+    elif args.dataset == "e1G": 
+        data = load_elliptic_data()
+        G_nx = to_networkx(data, to_undirected=True)
+        node_labels = {i: int(data.y[i].item()) for i in range(data.num_nodes)}
+        louvain_features, partition = get_louvain_features(data.edge_index, data.num_nodes, data.y, data.train_mask)   
+        illicit_nodes = [n for n in G_nx.nodes() if node_labels.get(n) == 1]
+        if len(illicit_nodes) > 0:
+            for node in range(len(illicit_nodes)):
+                # 我們選取第一個非法節點作為中心
+                target_node = illicit_nodes[node] 
+                print(f"Generating Ego Graph for Illicit Node: {target_node}")
+                # 抓取 2 層鄰居
+                ego_nodes = nx.single_source_shortest_path_length(G_nx, target_node, cutoff=2).keys()
+                G_ego = G_nx.subgraph(ego_nodes)
+                visualize_blockchain_communities(G_ego, partition=partition, labels=node_labels, node=node)
+                print("done")
+
     if args.dataset == "e2":
         process_ethereum_data()
     elif args.dataset == "e2nol":
         process_ethereum_data_noL()
+#  
+# eda_ethereum()
+# subgraph_process()

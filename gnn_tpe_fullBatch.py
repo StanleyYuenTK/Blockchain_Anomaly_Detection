@@ -35,7 +35,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
         if dataset_name == "e1":
 
-            if model_name in ["APPNP_Model"]: # best result 0.6580406654343808
+            if model_name in ["APPNP_Model"]:
 
                 # define search space for model
                 hidden_channels = trial.suggest_categorical('hidden_channels', [128, 256])
@@ -58,7 +58,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
                 }
                 lr = trial.suggest_float('lr', 1e-4, 1e-3, log=True)
 
-            elif model_name in ["ChebNet_Model"]: # best result 0.7151898734177216
+            elif model_name in ["ChebNet_Model"]:
                 # define search space for model
                 hidden_channels = trial.suggest_categorical('hidden_channels', [512, 1024])
                 dropout = trial.suggest_float('dropout', 0.6, 0.75)
@@ -80,17 +80,17 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
             elif model_name =="MixHop_Model":
                 # define search space for model
-                hidden_channels = trial.suggest_categorical('hidden_channels', [64, 128])
+                hidden_channels = trial.suggest_categorical('hidden_channels', [128, 256, 512])
                 dropout = trial.suggest_float('dropout', 0.4, 0.6, log=False)
-                num_layers = trial.suggest_int('num_layers', 2,3)
+                num_layers = 1 ## MixHop_Model no layers setting
                 
                 # define search space for training, testing parameters
                 weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True)
-                focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.6, 0.8])
-                threshold=0.3
+                focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.8, 0.85, 0.90, 0.93])
+                threshold=0.5
 
                 # define search space for model
-                powers = trial.suggest_categorical("powers", ["(0, 1, 2)", "(0, 1, 2, 3)"])
+                powers = trial.suggest_categorical("powers", ["(0, 1, 2)", "(0, 1, 2, 3)", "(0, 1, 2, 4)"])
                 params = {
                     'hidden_channels': hidden_channels,
                     'dropout': dropout,
@@ -202,9 +202,8 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
                 # define search space for training, testing parameters
                 lr = trial.suggest_categorical('lr', [0.001, 0.003])
-                weight_decay = trial.suggest_categorical('weight_decay', [1e-5, 3e-5, 1e-4]) #0.00001, 0.0001, 0.0003, 0.001, 0.003
+                weight_decay = trial.suggest_categorical('weight_decay', [1e-5, 3e-5, 1e-4])
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.85, 0.90])
-
 
             elif model_name in ["ChebNet_Model"]: 
                 # define search space for model
@@ -219,8 +218,24 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
                 # define search space for training, testing parameters
                 lr = trial.suggest_categorical('lr', [0.00001, 0.0001, 0.001, 0.003])
-                weight_decay = trial.suggest_categorical('weight_decay', [1e-5, 1e-4, 3e-4, 1e-3, 3e-3]) #0.00001, 0.0001, 0.0005, 0.001, 0.005
+                weight_decay = trial.suggest_categorical('weight_decay', [1e-5, 1e-4, 3e-4, 1e-3, 3e-3])
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.90, 0.93, 0.95, 0.97])
+
+            elif model_name =="MixHop_Model":
+                # define search space for model
+                hidden_channels = trial.suggest_categorical('hidden_channels', [64, 128, 256])
+                dropout = trial.suggest_float('dropout', 0.4, 0.6, step=0.1)
+                powers = trial.suggest_categorical("powers", ["(0, 1, 2)", "(0, 1, 2, 3)"])
+                params = {
+                    'hidden_channels': hidden_channels,
+                    'dropout': dropout,
+                    'powers':powers
+                }
+
+                # define search space for training, testing parameters
+                lr = trial.suggest_categorical('lr', [0.001, 0.003, 0.005])
+                weight_decay = trial.suggest_categorical('weight_decay', [3e-4, 1e-3, 3e-3])
+                focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.8, 0.85])
 
             elif model_name in ["GAT_Model"]:
                 # define search space for model
@@ -239,7 +254,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
                 # define search space for training, testing parameters
                 lr = trial.suggest_categorical('lr', [0.003, 0.005, 0.01])
-                weight_decay = trial.suggest_categorical('weight_decay', [1e-6, 1e-5, 1e-4]) #0.00001, 0.0001, 0.0005, 0.001, 0.005
+                weight_decay = trial.suggest_categorical('weight_decay', [1e-6, 1e-5, 1e-4])
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.85, 0.90, 0.93])
 
             elif model_name in ["GCN_Model"]:
@@ -257,7 +272,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
                 # define search space for training, testing parameters
                 lr = trial.suggest_categorical('lr', [0.001, 0.003, 0.005])
-                weight_decay = trial.suggest_categorical('weight_decay', [1e-3, 3e-3, 5e-3]) #0.00001, 0.0001, 0.0005, 0.001, 0.005
+                weight_decay = trial.suggest_categorical('weight_decay', [1e-3, 3e-3, 5e-3])
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.85, 0.90, 0.93])
 
             elif model_name in ["GIN_Model"]:
@@ -275,7 +290,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
                 # define search space for training, testing parameters
                 lr = trial.suggest_float('lr', 5e-4, 2e-3, log=True)
-                weight_decay = trial.suggest_categorical('weight_decay', [1e-3, 5e-3]) #0.00001, 0.0001, 0.0005, 0.001, 0.005
+                weight_decay = trial.suggest_categorical('weight_decay', [1e-3, 5e-3])
                 focalloss_alpha = trial.suggest_float('focalloss_alpha', 0.7, 0.9)
 
             elif model_name in ["GraphSAGE_Model"]:
@@ -293,28 +308,11 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
                 # define search space for training, testing parameters
                 lr = trial.suggest_categorical('lr', [0.00001, 0.0001, 0.001, 0.003])
-                weight_decay = trial.suggest_categorical('weight_decay', [1e-5, 1e-4, 3e-4, 1e-3, 3e-3]) #0.00001, 0.0001, 0.0005, 0.001, 0.005
+                weight_decay = trial.suggest_categorical('weight_decay', [1e-5, 1e-4, 3e-4, 1e-3, 3e-3])
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.90, 0.93, 0.95, 0.97])
-
-            elif model_name =="MixHop_Model":
-                # define search space for model
-                hidden_channels = trial.suggest_categorical('hidden_channels', [64, 128, 256])
-                dropout = trial.suggest_float('dropout', 0.4, 0.6, step=0.1)
-                powers = trial.suggest_categorical("powers", ["(0, 1, 2)", "(0, 1, 2, 3)"])
-                params = {
-                    'hidden_channels': hidden_channels,
-                    'dropout': dropout,
-                    'powers':powers
-                }
-
-                # define search space for training, testing parameters
-                lr = trial.suggest_categorical('lr', [0.001, 0.003, 0.005])
-                weight_decay = trial.suggest_categorical('weight_decay', [3e-4, 1e-3, 3e-3]) #0.00001, 0.0001, 0.0005, 0.001, 0.005
-                focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.8, 0.85])
 
         gnn_best_params = gnn_best_params | params
         model = get_gnn(model_name, data, gnn_best_params)        
-
 
         # training and testing and evaluate --------------
         model = train_gnn_fullbatch(trial, data, threshold, model, 
@@ -339,19 +337,15 @@ def gnn_objective(dataset_name, trial, model_name, data):
         trial.set_user_attr("auc", auc)
         trial.set_user_attr("test_f1", f1)
     
-        # 設定底線
         if auc < 0.6 or prec < 0.4 or recall < 0.4:
-            return f1 *0.01 # 極低分，但保留一點點 AUC 作為引導梯度
+            return f1 *0.1
 
-        # 核心：如果你很看重 Precision，就給它權重
-        # 這樣就算 F1 一樣，Precision 高的也會勝出
-        refined_score = f1
+        refined_score = 0.7 * f1 + 0.2 * prec + 0.1 * recall
 
-        # 額外懲罰區（針對你提到的 0.3 門檻）
         if prec < 0.5:
-            refined_score *= 0.5  # 精確度不到 0.3，分數直接砍半
+            refined_score *= 0.5
         if recall < 0.5:
-            refined_score *= 0.5  # 召回率不到 0.3，分數再砍半
+            refined_score *= 0.5
 
         return refined_score
     
@@ -370,12 +364,12 @@ def get_gnn(model_name, data, best_params):
     model = model_func(best_params).to(device)
     return model
 
+
 def evaluate_model(model, data, mask, threshold):
     model.eval()
     with torch.no_grad():
         x = data.x.to(device)
         edge_index = data.edge_index.to(device)
-        
         out = model(x, edge_index)
         
         probs = torch.sigmoid(out[mask])
@@ -383,7 +377,6 @@ def evaluate_model(model, data, mask, threshold):
             probs = probs[:, 1]
             
         y_pred = (probs > threshold).cpu().numpy().flatten()
-        
         y_true = data.y[mask].cpu().numpy().flatten()
 
     return f1_score(y_true, y_pred, pos_label=1, zero_division=0)
@@ -395,9 +388,8 @@ def train_gnn_fullbatch(trial, data, threshold, model, epochs, lr, alpha, weight
     model.to(device)
 
     best_val_f1 = 0
-    patience = epochs*0.1  # 設定 20 輪沒進步就停止
+    patience = epochs*0.2
     counter = 0
-
 
     for epoch in range(epochs):
         model.train()
@@ -416,12 +408,11 @@ def train_gnn_fullbatch(trial, data, threshold, model, epochs, lr, alpha, weight
         
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
-            counter = 0  # 重置計數器
-            # 可以在這裡儲存最佳模型 state_dict
+            counter = 0 
         else:
             counter += 1
             if counter >= patience:
-                # print(f"Early stopping at epoch {epoch}")
+                print(f"Early stopping at epoch {epoch}")
                 break
             
     return model
@@ -497,10 +488,11 @@ def main(dataset_name="e1"):
     elif dataset_name == 'e2':
         data = dataset_zoo.load_ethereum_data()
     data = data.to(device)
+
     # ========================================================================
-    # 2. TPE - Optuna - done
+    # TPE - Optuna - optimize GNN model
     # ========================================================================
-    print("\n2. TPE - Optuna GNN models...")
+    print("\nTPE - Optuna GNN models...")
     gnn_models_list = inspect.getmembers(gnn_zoo, inspect.isfunction)
 
     for model_name, _ in gnn_models_list:
@@ -518,8 +510,8 @@ def main(dataset_name="e1"):
         print(f"saved {model_name}_tpe_params")
 
         df = study.trials_dataframe()
-        # 篩選出你存入的 user_attrs
         print(df[['value', 'user_attrs_precision', 'user_attrs_recall', 'user_attrs_auc', 'user_attrs_test_f1']])
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Blockchain Anomaly Detection with GNNs')

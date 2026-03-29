@@ -1,11 +1,8 @@
 ## GNN model ZOO
-
-import torch
-import torch.nn.functional as F
 from torch_geometric.nn import GAT, GCN, GIN, GraphSAGE, Sequential
-from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv, MLP, APPNP, ChebConv, GCN2Conv, MixHopConv, BatchNorm
+from torch_geometric.nn import APPNP, ChebConv, MixHopConv, BatchNorm
 
-from torch.nn import ReLU, Dropout, BatchNorm1d, Softmax, LogSoftmax, Linear
+from torch.nn import ReLU, Dropout, Linear
 
 # =================================================================================
 # basic GNNs - done
@@ -63,6 +60,7 @@ def APPNP_Model(best_params=None):
         (Dropout(p=dropout), 'x -> x'),
         (Linear(in_channels, hidden_channels), 'x -> x'),
         (ReLU(inplace=True), 'x -> x'),
+        
         (Dropout(p=dropout), 'x -> x'),
         (Linear(hidden_channels, out_channels), 'x -> x'),
         (APPNP(K=K, alpha=alpha), 'x, edge_index -> x'),
@@ -113,11 +111,6 @@ def MixHop_Model(best_params=None):
         (BatchNorm(current_dim), 'x -> x'),
         (ReLU(inplace=True), 'x -> x'),
         (Dropout(p=dropout), 'x -> x'),
-
-        (MixHopConv(current_dim, hidden_channels, powers=powers), 'x, edge_index -> x'),
-        (BatchNorm(current_dim), 'x -> x'),
-        (ReLU(inplace=True), 'x -> x'),
-        (Dropout(p=dropout), 'x -> x'),
-
+        
         (Linear(current_dim, out_channels), 'x -> x'),
     ])
