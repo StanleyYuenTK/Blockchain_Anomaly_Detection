@@ -113,7 +113,7 @@ def evaluate_model(model, data, mask, threshold):
     return f1_score(y_true, y_pred, pos_label=1, zero_division=0)
 
 
-def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0.4):
+def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0.5):
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = FocalLoss(alpha=alpha, reduction='mean')
 
@@ -148,7 +148,7 @@ def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0
     return model
 
 
-def test_gnn(model, data, threshold=0.4): 
+def test_gnn(model, data, threshold=0.5): 
     model.eval()
     with torch.no_grad():
         out = model(data.x, data.edge_index)
@@ -207,17 +207,16 @@ def train_and_test_gnn(model_name, data, best_params={}):
     lr = best_params.get('lr', 0.01)
     focalloss_alpha = best_params.get('focalloss_alpha', 0.875)
     weight_decay = best_params.get('weight_decay', 5e-4)
-    threshold = best_params.get('threshold', 0.4)
+    threshold = best_params.get('threshold', 0.5)
 
     model = get_gnn(model_name, data, best_params)
-    # model.to(device)
-    # data_device = data.clone().to(device)
-    model = train_gnn(model, data, lr, focalloss_alpha, weight_decay)
-    return test_gnn(model, data, threshold)
+    data_device = data.clone().to(device)
+    model = train_gnn(model, data_device, lr, focalloss_alpha, weight_decay)
+    return test_gnn(model, data_device, threshold)
      
 
 # ==============================================================================
-# Catboost Model - stacking
+# Ensemble Learning - stacking
 # ==============================================================================
 # ==============================================================================
 # Genetic Algorithm - used to select GNN model for Stacking
@@ -280,12 +279,22 @@ def fitness_func(ga_instance, solution, solution_idx,
 # TPE - Optuna
 # ==============================================================================
 
-def catboost_objective(trial, data, gnns_val_probs):
+def catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold):
     """Optuna objective function for CatBoost model optimization"""
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate
     X_val_raw_meta = np.hstack([data.x[data.val_mask].numpy(), X_val_meta])
     y_val = data.y[data.val_mask].numpy()
-    X_tr, X_ev, y_tr, y_ev = train_test_split(X_val_raw_meta, y_val, test_size=0.25, random_state=RANDOM_SEED)
+    # X_tr, X_ev, y_tr, y_ev = train_test_split(X_val_raw_meta, y_val, test_size=0.25, random_state=RANDOM_SEED)
+
+
+    train_mask = (val_ts < split_threshold)
+    val_mask = (val_ts >= split_threshold)
+
+    X_tr = X_val_raw_meta[train_mask]
+    y_tr = y_val[train_mask]
+    X_ev = X_val_raw_meta[val_mask]
+    y_ev = y_val[val_mask]
+
 
     # Define search space
     learning_rate = trial.suggest_float('learning_rate', 1e-3, 0.5, log=True)
@@ -438,7 +447,6 @@ def main(dataset_name):
         print("dataset:", dataset_name, 'ver', ver)
         data = dataset_zoo.load_ethereum_data(ver=ver)
 
-    data.to(device)
 
     # ========================================================================
     # Train Isolation Forest baseline
@@ -446,7 +454,7 @@ def main(dataset_name):
     print("\nTraining Isolation Forest baseline...")
     baseline_results = isolation_forest_baseline(data)
     df_baseline_results = pd.DataFrame([baseline_results])
-    print("-"*60, "done", "-"*60)
+    print("-"*30, "done", "-"*30)
 
     # ========================================================================
     # Train and test GNN model
@@ -461,7 +469,7 @@ def main(dataset_name):
     gnn_models_list = inspect.getmembers(gnn_zoo, inspect.isfunction)
     # print('\ngnn models length:', len(gnn_models_list))
     for model_name, _ in gnn_models_list:
-        print(f"\n--- Training {model_name} ---")
+        print("\n", "-"*30, f"Training {model_name}", "-"*30)
 
         # load best params
         with open(f"best_model_params/best_{dataset_name}/{model_name}_params_{dataset_name}.json", "r") as f:
@@ -471,12 +479,16 @@ def main(dataset_name):
 
         # train and eval 
         gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds = train_and_test_gnn(model_name, data, best_params)
+        
+        # probs
         gnns_val_probs.append(gnn_val_probs.reshape(-1, 1))
         gnns_test_probs.append(gnn_test_probs.reshape(-1, 1))
+
+        # metrics
         model_val_performance, model_test_performance = eval_gnn(model_name, y_val, y_test, gnn_val_probs, gnn_val_preds, gnn_test_probs, gnn_test_preds)
         models_val_performance.append(model_val_performance)
         models_test_performance.append(model_test_performance)
-        print("-"*60, "done", "-"*60)
+        print("-"*30, "done", "-"*30)
 
     df_val_results = pd.DataFrame(models_val_performance)
     df_test_results = pd.DataFrame(models_test_performance)
@@ -535,7 +547,7 @@ def main(dataset_name):
     # ========================================================================
     
     study = optuna.create_study(direction='maximize')
-    study.optimize(lambda trial: catboost_objective(trial, data, filtered_val_probs), n_trials=n_trials)
+    study.optimize(lambda trial: catboost_objective(trial, data, filtered_val_probs, val_ts, split_threshold), n_trials=n_trials)
     best_trial = study.best_trial
     cat_best_params = best_trial.params
     print(f"Best hyperparameters - CatBoost: {cat_best_params}")

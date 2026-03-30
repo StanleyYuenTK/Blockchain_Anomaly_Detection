@@ -14,7 +14,7 @@ from torch.nn import ReLU, Dropout, Linear
 # =================================================================================
 # basic GNNs - done
 # =================================================================================
-def GCN_Model(best_params=None):
+def GCN_Model(best_params={}):
     in_channels = best_params.get('in_channels', None)
     hidden_channels = best_params.get('hidden_channels', 64)
     out_channels = best_params.get('out_channels', 2)
@@ -23,7 +23,7 @@ def GCN_Model(best_params=None):
     jk = best_params.get('jk', None)
     return GCN(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm', jk=jk)
 
-def GAT_Model(best_params=None):
+def GAT_Model(best_params={}):
     in_channels = best_params.get('in_channels', None)
     hidden_channels = best_params.get('hidden_channels', 64)
     out_channels = best_params.get('out_channels', 2)
@@ -33,7 +33,7 @@ def GAT_Model(best_params=None):
     jk = best_params.get('jk', None)
     return GAT(in_channels, hidden_channels, num_layers, out_channels, dropout, heads=heads, norm='batch_norm', jk=jk)
 
-def GraphSAGE_Model(best_params=None):
+def GraphSAGE_Model(best_params={}):
     in_channels = best_params.get('in_channels', None)
     hidden_channels = best_params.get('hidden_channels', 64)
     out_channels = best_params.get('out_channels', 2)
@@ -42,7 +42,7 @@ def GraphSAGE_Model(best_params=None):
     jk = best_params.get('jk', None)
     return GraphSAGE(in_channels, hidden_channels, num_layers, out_channels, dropout, norm='batch_norm', jk=jk)
 
-def GIN_Model(best_params=None):
+def GIN_Model(best_params={}):
     in_channels = best_params.get('in_channels', None)
     hidden_channels = best_params.get('hidden_channels', 64)
     out_channels = best_params.get('out_channels', 2)
@@ -54,7 +54,7 @@ def GIN_Model(best_params=None):
 # =================================================================================
 # APPNP 
 # =================================================================================
-def APPNP_Model(best_params=None):
+def APPNP_Model(best_params={}):
     #### Official PyG APPNP
     in_channels = best_params.get('in_channels', None)
     hidden_channels = best_params.get('hidden_channels', 64)
@@ -77,7 +77,7 @@ def APPNP_Model(best_params=None):
 # =================================================================================
 # ChebNet
 # =================================================================================
-def ChebNet_Model(best_params=None):
+def ChebNet_Model(best_params={}):
     # Official PyG chebnet
     in_channels = best_params.get('in_channels', None)
     hidden_channels = best_params.get('hidden_channels', 16)
@@ -87,8 +87,15 @@ def ChebNet_Model(best_params=None):
 
     return Sequential('x, edge_index', [
         (ChebConv(in_channels, hidden_channels, K=K), 'x, edge_index -> x'),
+        (BatchNorm(hidden_channels), 'x -> x'),
         (ReLU(inplace=True), 'x -> x'),
         (Dropout(dropout), 'x -> x'),
+
+        (ChebConv(hidden_channels, hidden_channels, K=K), 'x, edge_index -> x'),
+        (BatchNorm(hidden_channels), 'x -> x'),
+        (ReLU(inplace=True), 'x -> x'),
+        (Dropout(dropout), 'x -> x'),
+
         (ChebConv(hidden_channels, out_channels, K=K), 'x, edge_index -> x'),
         # (LogSoftmax(dim=1), 'x -> x'), cancel logsoftmax for focal loss
     ])
@@ -96,7 +103,7 @@ def ChebNet_Model(best_params=None):
 # =================================================================================
 # MixHop 
 # =================================================================================
-def MixHop_Model(best_params=None):
+def MixHop_Model(best_params={}):
     # Official PyG Mixhop
     in_channels = best_params.get('in_channels', None)
     hidden_channels = best_params.get('hidden_channels', 64)

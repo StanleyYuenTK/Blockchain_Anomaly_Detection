@@ -41,24 +41,26 @@ def gnn_objective(dataset_name, trial, model_name, data):
             'in_channels': data.x.size(1),
             'out_channels': 2,
         }
-
+        threshold = 0.5
         if dataset_name == "e1":
 
             if model_name in ["APPNP_Model"]:
 
                 # define search space for model
-                hidden_channels = trial.suggest_categorical('hidden_channels', [128, 256])
+                hidden_channels = trial.suggest_categorical('hidden_channels', [512, 1024])
                 dropout = trial.suggest_float('dropout', 0.5, 0.8, log=False)
                 num_layers = 1 ## appnp model no layers setting
                 
                 # define search space for training, testing parameters
                 weight_decay = trial.suggest_float('weight_decay', 1e-5, 5e-3, log=True)
-                focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.90, 0.93, 0.95, 0.97])
+                # focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.90, 0.93, 0.95, 0.97])
+                focalloss_alpha = trial.suggest_float('focalloss_alpha', 0.4, 0.9, step=0.1)
+
                 
 
                 # define search space for model
-                K = trial.suggest_int('K', 2, 10)
-                alpha = trial.suggest_float('alpha', 0.3, 0.6) 
+                K = trial.suggest_int('K', 2, 5)
+                alpha = trial.suggest_float('alpha', 0.3, 0.5) 
                 params = {
                     'hidden_channels': hidden_channels,
                     'dropout': dropout,
@@ -70,14 +72,18 @@ def gnn_objective(dataset_name, trial, model_name, data):
             elif model_name in ["ChebNet_Model"]:
                 # define search space for model
                 hidden_channels = trial.suggest_categorical('hidden_channels', [512, 1024])
-                dropout = trial.suggest_float('dropout', 0.6, 0.75)
+                dropout = trial.suggest_float('dropout', 0.55, 0.7)
                 num_layers = 1 ## ChebNet model no layers setting
                 K = trial.suggest_int('K', 2, 3)
                 
                 # define search space for training, testing parameters
-                weight_decay = trial.suggest_float('weight_decay', 5e-3, 2e-2, log=True)
-                focalloss_alpha = trial.suggest_float('focalloss_alpha', 0.93, 0.97)
-                threshold=trial.suggest_float('threshold', 0.2, 0.3)
+                lr = trial.suggest_float('lr', 1e-4, 5e-4, log=True)
+                weight_decay = trial.suggest_float('weight_decay', 3e-3, 2e-2, log=True)
+                # focalloss_alpha = trial.suggest_float('focalloss_alpha', 0.9, 0.97)
+                focalloss_alpha = trial.suggest_float('focalloss_alpha', 0.4, 0.9, step=0.1)
+
+                # focalloss_alpha = trial.suggest_float('focalloss_alpha', 0.93, 0.97)
+                # threshold=trial.suggest_float('threshold', 0.2, 0.3)
 
                 # define search space for model
                 params = {
@@ -85,7 +91,6 @@ def gnn_objective(dataset_name, trial, model_name, data):
                     'dropout': dropout,
                     'K': K,
                 }
-                lr = trial.suggest_float('lr', 1e-4, 5e-4, log=True)
 
             elif model_name =="MixHop_Model":
                 # define search space for model
@@ -96,7 +101,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
                 # define search space for training, testing parameters
                 weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True)
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.8, 0.85, 0.90, 0.93])
-                threshold=0.5
+                # threshold=0.5
 
                 # define search space for model
                 powers = trial.suggest_categorical("powers", ["(0, 1, 2)", "(0, 1, 2, 3)", "(0, 1, 2, 4)"])
@@ -116,7 +121,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
                 # define search space for training, testing parameters
                 weight_decay = trial.suggest_float('weight_decay', 1e-5, 5e-3, log=True)
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.90, 0.93, 0.95, 0.97])
-                threshold=0.5
+                # threshold=0.5
 
                 # define search space for model
                 heads = trial.suggest_categorical('heads', [4,8])
@@ -139,7 +144,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
                 # define search space for training, testing parameters
                 weight_decay = trial.suggest_float('weight_decay', 1e-5, 5e-3, log=True)
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.90, 0.93, 0.95, 0.97])
-                threshold=0.5
+                # threshold=0.5
 
                 # define search space for model
                 jk = trial.suggest_categorical('jk', ['max', 'cat'])
@@ -160,7 +165,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
                 # define search space for training, testing parameters
                 weight_decay = trial.suggest_float('weight_decay', 1e-5, 5e-3, log=True)
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.90, 0.93, 0.95, 0.97])
-                threshold=0.5
+                # threshold=0.5
 
                 # define search space for model
                 jk = trial.suggest_categorical('jk', ['max', 'cat'])
@@ -181,7 +186,7 @@ def gnn_objective(dataset_name, trial, model_name, data):
                 # define search space for training, testing parameters
                 weight_decay = trial.suggest_float('weight_decay', 1e-5, 5e-3, log=True)
                 focalloss_alpha = trial.suggest_categorical('focalloss_alpha', [0.90, 0.93, 0.95, 0.97])
-                threshold=0.5
+                # threshold=0.5
 
                 # define search space for model
                 jk = trial.suggest_categorical('jk', ['max', 'cat'])

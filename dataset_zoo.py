@@ -75,7 +75,6 @@ def get_louvain_features(edge_index, num_nodes, labels=None, train_mask=None, re
     
     # Get community IDs for all nodes
     comm_ids = np.array([partition.get(i, -1) for i in range(num_nodes)])
-    print("comm_ids", comm_ids)
     
     # Compute community statistics
     comm_size = {}
