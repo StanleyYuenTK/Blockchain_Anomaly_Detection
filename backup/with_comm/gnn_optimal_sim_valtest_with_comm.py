@@ -6,6 +6,7 @@ import inspect
 
 import pandas as pd
 import torch
+import torch.nn as nn
 from sklearn.metrics import f1_score, classification_report, roc_auc_score
 
 ## Focal Loss https://kornia.readthedocs.io/en/latest/losses.html#kornia.losses.focal_loss
@@ -27,24 +28,34 @@ epochs=200
 
 # GNN Model
 def get_gnn(model_name, data, best_params):
-    best_params['in_channels'] = data.x.size(1)
+    best_params['in_channels'] = data.x.size(1) + 16
     best_params['out_channels'] = 2
     # Initialize GNN model
     model_func = getattr(gnn_zoo, model_name, None)
     model = model_func(best_params).to(device)
     return model
 
-def evaluate_model(model, data, mask, threshold):
+
+def evaluate_model(model, data, comm_emb, mask, threshold):
     model.eval()
     with torch.no_grad():
-        out = model(data.x, data.edge_index)
-        probs = torch.softmax(out[mask], dim=1)[:, 1]
+        comm_feat = comm_emb(data.comm_id.long())
+        
+        x = torch.cat([data.x, comm_feat], dim=-1)
+        
+        out = model(x, data.edge_index)
+        
+        probs = torch.sigmoid(out[mask])
+        if probs.dim() > 1 and probs.size(1) == 2:
+            probs = probs[:, 1]
+            
         y_pred = (probs > threshold).cpu().numpy().flatten()
+        
         y_true = data.y[mask].cpu().numpy().flatten()
 
     return f1_score(y_true, y_pred, pos_label=1, zero_division=0)
 
-def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0.5):
+def train_gnn(model, data, comm_emb, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0.5):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = FocalLoss(alpha=alpha, reduction='mean')
@@ -57,15 +68,18 @@ def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0
     for epoch in range(epochs):
         model.train()
 
+        comm_feat = comm_emb(data.comm_id.long())
+        x = torch.cat([data.x, comm_feat], dim=-1)
+
         optimizer.zero_grad()
-        out = model(data.x, data.edge_index)
+        out = model(x, data.edge_index)
         loss = criterion(out[data.train_mask], data.y[data.train_mask])
         loss.backward()
         optimizer.step()
 
         model.eval()
         with torch.no_grad():
-            val_f1 = evaluate_model(model, data, data.val_mask, threshold)
+            val_f1 = evaluate_model(model, data, comm_emb, data.val_mask, threshold)
             
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
@@ -80,10 +94,13 @@ def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0
     model.load_state_dict(best_model_wts)
     return model
 
-def test_gnn(model, data, threshold=0.5): 
+def test_gnn(model, data, comm_emb, threshold=0.5): 
     model.eval()
     with torch.no_grad():
-        out = model(data.x, data.edge_index)
+        comm_feat = comm_emb(data.comm_id.long())
+        x = torch.cat([data.x, comm_feat], dim=-1)
+
+        out = model(x, data.edge_index)
         probs = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
        
         val_probs = probs[data.val_mask.cpu().numpy()]
@@ -132,6 +149,7 @@ def eval_gnn(model_name, y_val, y_test, val_probs, val_preds, test_probs, test_p
     }
     
     return model_val_performance, model_test_performance
+
     
 def train_and_test_gnn(model_name, data, best_params={}):
     lr = best_params.get('lr', 0.01)
@@ -139,11 +157,12 @@ def train_and_test_gnn(model_name, data, best_params={}):
     weight_decay = best_params.get('weight_decay', 5e-4)
     threshold = best_params.get('threshold', 0.5)
 
+    comm_emb = nn.Embedding(data.comm_id.max().item() + 1, 16).to(device)
+    
     model = get_gnn(model_name, data, best_params)
-    model.to(device)
     data2 = data.clone().to(device)
-    model = train_gnn(model, data2, lr, focalloss_alpha, weight_decay)
-    return test_gnn(model, data2, threshold)
+    model = train_gnn(model, data2, comm_emb, lr, focalloss_alpha, weight_decay)
+    return test_gnn(model, data2, comm_emb, threshold)
      
 
 # ==============================================================================

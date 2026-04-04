@@ -235,6 +235,7 @@ def process_elliptic_data_noL(dataset_dir='Dataset/elliptic dataset'):
     data.train_mask = (data.timesteps < 35) & (y != -1)
     data.val_mask   = (data.timesteps >= 35) & (data.timesteps < 42) & (y != -1)
     data.test_mask  = (data.timesteps >= 42) & (y != -1)
+    # print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
 
     # 7. feature engineering - pagerank, degree, louvain -------------------------------
     print("PageRank features...")
@@ -316,6 +317,10 @@ def load_elliptic_data(fname='Dataset/elliptic dataset/elliptic_processed_data.p
 
     data = torch.load(fname, weights_only=False)
     y = data.y
+    # num_train =data.train_mask.sum().item()
+    # num_val = data.val_mask.sum().item()
+    # num_test = data.test_mask.sum().item()
+    # print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
 
     masks = {
         'train': data.train_mask,
@@ -453,7 +458,7 @@ def process_ethereum_data(dataset_dir='Dataset/ethereum dataset'):
     clustering_features = get_clustering_features(data.edge_index, data.x.size(0))
 
     # 7. combine
-    data.x = torch.cat([data.x, pagerank_features, louvain_features, clustering_features], dim=1)
+    data.x = torch.cat([data.x, louvain_features, pagerank_features, clustering_features], dim=1)
     print(f"Total features: {data.x.size(1)} dimensions")
 
     # 7. StandardScaler ----------------------------------------------------
@@ -643,6 +648,17 @@ def load_ethereum_data(fname='Dataset/ethereum dataset/subgraph_ethereum_process
 
     data = torch.load(fname, weights_only=False)
     y = data.y
+
+    # licit = int((y == 0).sum())
+    # illicit = int((y == 1).sum())
+    # total = licit + illicit
+
+    # print(f"licit={licit}, illicit={illicit}, total_labeled={total}")
+    # print(f"licit ratio={licit/total:.4%}, illicit ratio={illicit/total:.4%}")
+
+    # print(data.train_mask.sum()) 
+    # print(data.test_mask.sum())
+    # print(f"Data splits: Train: {data.train_mask.sum().item()}, Val: {data.val_mask.sum().item()}, Test: {data.test_mask.sum().item()}")
 
     masks = {
         'train': data.train_mask,

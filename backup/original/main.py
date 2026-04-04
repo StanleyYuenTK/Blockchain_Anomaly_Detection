@@ -244,7 +244,7 @@ def fitness_func(ga_instance, solution, solution_idx,
         depth=4,
         l2_leaf_reg=10,
         loss_function='Logloss',
-        eval_metric='F1',
+        eval_metric='AUC',
         auto_class_weights='Balanced',
 
         ## constant
@@ -287,8 +287,8 @@ def catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold):
 
     # Define search space
     learning_rate = trial.suggest_float('learning_rate', 1e-3, 0.5, log=True)
-    depth = trial.suggest_int('depth', 4, 10)
-    l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 0.01, 10, log=True)
+    depth = trial.suggest_int('depth', 3, 5)
+    l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 10, 50, log=True)
 
     cat = CatBoostClassifier(
         iterations=epochs,
@@ -298,7 +298,7 @@ def catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold):
         depth=depth,
         l2_leaf_reg=l2_leaf_reg,
         loss_function='Logloss',
-        eval_metric='F1',
+        eval_metric='AUC',
         auto_class_weights='Balanced',
 
         ## constant
@@ -379,7 +379,7 @@ def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params={}):
         depth=depth,
         l2_leaf_reg=l2_leaf_reg,
         loss_function='Logloss',
-        eval_metric='F1',
+        eval_metric='AUC',
         auto_class_weights='Balanced',
 
         # constant

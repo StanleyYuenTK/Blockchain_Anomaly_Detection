@@ -15,6 +15,7 @@ import inspect
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
 from sklearn.metrics import f1_score, classification_report, roc_auc_score
 
 # dataset
@@ -85,7 +86,7 @@ def isolation_forest_baseline(data):
 
 # GNN Model
 def get_gnn(model_name, data, best_params):
-    best_params['in_channels'] = data.x.size(1)
+    best_params['in_channels'] = data.x.size(1) + 16
     best_params['out_channels'] = 2
     # Initialize GNN model
     model_func = getattr(gnn_zoo, model_name, None)
@@ -93,18 +94,26 @@ def get_gnn(model_name, data, best_params):
     return model
 
 
-def evaluate_model(model, data, mask, threshold):
+def evaluate_model(model, data, comm_emb, mask, threshold):
     model.eval()
     with torch.no_grad():
-        out = model(data.x, data.edge_index)
-        probs = torch.softmax(out[mask], dim=1)[:, 1]
+        comm_feat = comm_emb(data.comm_id.long())
+        x = torch.cat([data.x, comm_feat], dim=-1)
+        
+        out = model(x, data.edge_index)
+        
+        probs = torch.sigmoid(out[mask])
+        if probs.dim() > 1 and probs.size(1) == 2:
+            probs = probs[:, 1]
+            
         y_pred = (probs > threshold).cpu().numpy().flatten()
+        
         y_true = data.y[mask].cpu().numpy().flatten()
 
     return f1_score(y_true, y_pred, pos_label=1, zero_division=0)
 
 
-def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0.5):
+def train_gnn(model, data, comm_emb, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0.5):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = FocalLoss(alpha=alpha, reduction='mean')
@@ -116,15 +125,18 @@ def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0
 
     for epoch in range(epochs):
         model.train()
+        comm_feat = comm_emb(data.comm_id.long())
+        x = torch.cat([data.x, comm_feat], dim=-1)
+
         optimizer.zero_grad()
-        out = model(data.x, data.edge_index)
+        out = model(x, data.edge_index)
         loss = criterion(out[data.train_mask], data.y[data.train_mask])
         loss.backward()
         optimizer.step()
 
         model.eval()
         with torch.no_grad():
-            val_f1 = evaluate_model(model, data, data.val_mask, threshold)
+            val_f1 = evaluate_model(model, data, comm_emb, data.val_mask, threshold)
             
         if val_f1 > best_val_f1:
             best_val_f1 = val_f1
@@ -140,10 +152,13 @@ def train_gnn(model, data, lr=0.002, alpha=0.875, weight_decay=5e-4, threshold=0
     return model
 
 
-def test_gnn(model, data, threshold=0.5): 
+def test_gnn(model, data, comm_emb, threshold=0.5): 
     model.eval()
     with torch.no_grad():
-        out = model(data.x, data.edge_index)
+        comm_feat = comm_emb(data.comm_id.long())
+        x = torch.cat([data.x, comm_feat], dim=-1)
+
+        out = model(x, data.edge_index)
         probs = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
        
         val_probs = probs[data.val_mask.cpu().numpy()]
@@ -201,10 +216,12 @@ def train_and_test_gnn(model_name, data, best_params={}):
     weight_decay = best_params.get('weight_decay', 5e-4)
     threshold = best_params.get('threshold', 0.5)
 
+    comm_emb = nn.Embedding(data.comm_id.max().item() + 1, 16).to(device)
+    
     model = get_gnn(model_name, data, best_params)
     data_device = data.clone().to(device)
-    model = train_gnn(model, data_device, lr, focalloss_alpha, weight_decay)
-    return test_gnn(model, data_device, threshold)
+    model = train_gnn(model, data_device, comm_emb, lr, focalloss_alpha, weight_decay)
+    return test_gnn(model, data_device, comm_emb, threshold)
      
 
 # ==============================================================================
@@ -276,6 +293,8 @@ def catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold):
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate
     X_val_raw_meta = np.hstack([data.x[data.val_mask].numpy(), X_val_meta])
     y_val = data.y[data.val_mask].numpy()
+    # X_tr, X_ev, y_tr, y_ev = train_test_split(X_val_raw_meta, y_val, test_size=0.25, random_state=RANDOM_SEED)
+
 
     train_mask = (val_ts < split_threshold)
     val_mask = (val_ts >= split_threshold)
@@ -285,10 +304,11 @@ def catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold):
     X_ev = X_val_raw_meta[val_mask]
     y_ev = y_val[val_mask]
 
+
     # Define search space
     learning_rate = trial.suggest_float('learning_rate', 1e-3, 0.5, log=True)
     depth = trial.suggest_int('depth', 4, 10)
-    l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 0.01, 10, log=True)
+    l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 1e-2, 10.0, log=True)
 
     cat = CatBoostClassifier(
         iterations=epochs,
@@ -309,6 +329,8 @@ def catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold):
         allow_writing_files=False,
     )
 
+
+    # cat.fit(X_tr, y_tr)
     cat.fit(X_tr, y_tr, eval_set=(X_ev, y_ev), use_best_model=True)
 
     test_preds = cat.predict(X_ev)
@@ -361,9 +383,11 @@ def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params={}):
     ## process meta data
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate
     X_test_meta = np.hstack(gnns_test_probs)
+    # print(f"X_val_meta shape: {X_val_meta.shape}, X_test_meta shape: {X_test_meta.shape}")
 
     X_val_raw_meta = np.hstack([data.x[data.val_mask].numpy(), X_val_meta])
     X_test_raw_meta = np.hstack([data.x[data.test_mask].numpy(), X_test_meta])
+    # print(f"X_val_final shape: {X_val_raw_meta.shape}, X_test_final shape: {X_test_raw_meta.shape}")
 
     # Extract best parameters or use defaults
     iterations = epochs
@@ -374,6 +398,7 @@ def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params={}):
     ## create catboost model and train and predict
     cat = CatBoostClassifier(
         iterations=iterations,
+        # early_stopping_rounds=(epochs*0.2),
         
         learning_rate=learning_rate,
         depth=depth,
@@ -548,7 +573,7 @@ def main(dataset_name):
     
     # show performance table
     print("\n", "="*60)
-    print(final_df_test_results[['model', 'macro f1-score', 'macro recall','macro precision','auc']])
+    print(final_df_test_results[['model', 'macro precision','macro recall','macro f1-score','auc']])
 
 
     # ========================================================================

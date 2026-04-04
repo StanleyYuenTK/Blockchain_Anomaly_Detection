@@ -4,6 +4,10 @@ Student ID: 24027277d
 Name: Yuen Tsz Ki
 
 Use TPE to fine-tune each model and save the optimal parameters.
+
+Rule: 
+
+
 """
 
 import gc

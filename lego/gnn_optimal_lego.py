@@ -41,27 +41,30 @@ def gnn_objective(dataset_name, trial, model_name, data):
 
         num_comm = data.comm_id.max().item() + 1
 
-        best_params = {
+     
+        # define search space for model
+        hidden_channels = trial.suggest_categorical('hidden_channels', [8, 16, 32, 64])
+        dropout = trial.suggest_float('dropout', 0.4, 0.6, log=False)
+        powers = trial.suggest_categorical("powers", ["(0, 1, 2, 3)", "(0, 1, 2, 4)", "(1, 2, 3, 4)", "(1, 3, 5)"])
+        K = trial.suggest_int('K', 2, 6)
+        alpha = trial.suggest_float('alpha', 0.2, 0.5) 
+        gnn_best_params = {
             'in_channels': data.x.size(1),
             'out_channels': 2,
-        }
-        # define search space for model
-        hidden_channels = trial.suggest_categorical('hidden_channels', [32, 64, 128])
-        dropout = trial.suggest_float('dropout', 0.4, 0.6, log=False)
-        powers = trial.suggest_categorical("powers", ["(0, 1, 2, 3)", "(0, 1, 2, 4)"])
-        params = {
             'hidden_channels': hidden_channels,
             'dropout': dropout,
-            'powers':powers
+            'powers':powers,
+            'K':K,
+            'alpha':alpha
         }
-        gnn_best_params = best_params | params
         
         model = Lego_GNN(num_communities=num_comm, best_params=gnn_best_params) 
  
         # define search space for training, testing parameters
         lr = trial.suggest_float('lr', 1e-4, 1e-3, log=True)
         weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True)
-        focalloss_alpha = trial.suggest_float('focalloss_alpha', 0.1, 0.6, step=0.1)
+        focalloss_alpha = trial.suggest_float('focalloss_alpha', 0.5, 0.9, step=0.1)
+
         threshold=0.5
 
 
@@ -131,7 +134,7 @@ def train_gnn_fullbatch(trial, data, threshold, model, epochs, lr, alpha, weight
     model.to(device)
 
     best_val_f1 = 0
-    patience = epochs*0.2
+    patience = 100
     counter = 0
 
     for epoch in range(epochs):

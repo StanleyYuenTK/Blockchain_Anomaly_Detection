@@ -9,7 +9,7 @@ GNN ZOO
 import torch
 import torch.nn as nn
 from torch_geometric.nn.encoding import TemporalEncoding
-from torch_geometric.nn import MixHopConv, APPNP
+from torch_geometric.nn import MixHopConv, APPNP, GATConv
 import torch.nn.functional as F
 
 
@@ -24,6 +24,9 @@ class Lego_GNN(torch.nn.Module):
         powers = best_params.get('powers', "[0, 1, 2]")
         powers = eval(powers)
         current_dim = hidden_channels * len(powers)
+        K = best_params.get('K', "3")
+        alpha = best_params.get('alpha', "0.2")
+
 
         self.dropout = best_params.get('dropout', 0.5)
         
@@ -35,21 +38,22 @@ class Lego_GNN(torch.nn.Module):
         # 總輸入維度 = 原始(in) + Community(16) + PPR(ppr_dim) + Degree(degree_dim)
         total_in_channels = in_channels + 16 + 16
         
-        # MixHopConv 使用 powers=[0, 1, 2] 代表同時考慮 0, 1, 2 階鄰居
-        self.conv1 = MixHopConv(total_in_channels, hidden_channels, powers=powers)
-        
-        # MixHop 的輸出維度是 hidden_channels * len(powers)
-        current_dim = hidden_channels * len(powers)
-        
-        self.conv2 = MixHopConv(current_dim, hidden_channels, powers=powers)
-        final_dim = hidden_channels * len(powers)
-        
-        self.bn1 = nn.BatchNorm1d(current_dim)
-        self.bn2 = nn.BatchNorm1d(final_dim)
-        
-        self.fc = nn.Linear(final_dim, out_channels) # 二分類
-        self.appnp = APPNP(K=10, alpha=0.875)
+        # ----- Branch 1: MixHop -----
+        self.mixhop = MixHopConv(total_in_channels, hidden_channels, powers=[0, 1, 2])
+        self.mixhop_proj = nn.Linear(hidden_channels * 3, hidden_channels)
 
+        # ----- Branch 2: GAT -----
+        self.gat = GATConv(total_in_channels, hidden_channels, heads=1, concat=True)
+
+        # ----- Branch 3: APPNP-style -----
+        self.appnp_mlp = nn.Linear(total_in_channels, hidden_channels)
+        self.appnp_prop = APPNP(K=K, alpha=alpha)
+
+        # Gating network: 對每個節點產生 3 個分支權重
+        self.gate = nn.Linear(hidden_channels * 3, 3)
+
+        # 最後線性分類頭
+        self.classifier = nn.Linear(hidden_channels, out_channels)
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
@@ -67,19 +71,29 @@ class Lego_GNN(torch.nn.Module):
         # 注意：所有拼接的 Tensor 必須在 dim=0 上長度一致 (num_nodes)
         x = torch.cat([x, comm_feat, time_feat], dim=-1)
         
-        x = F.dropout(x, p=self.dropout, training=self.training)
+        h_mix = self.mixhop(x, edge_index)
+        h_mix = F.relu(self.mixhop_proj(h_mix))
 
-        # 3. 第一層卷積與後處理
-        x = self.conv1(x, edge_index)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
+        h_gat = F.relu(self.gat(x, edge_index))
 
-        # 4. 第二層卷積
-        x = self.conv2(x, edge_index)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
+        h_app = F.relu(self.appnp_mlp(x))
+        h_app = self.appnp_prop(h_app, edge_index)
 
-        # 5. 分類輸出
-        return self.fc(x)
+        h_mix = F.dropout(h_mix, p=self.dropout, training=self.training)
+        h_gat = F.dropout(h_gat, p=self.dropout, training=self.training)
+        h_app = F.dropout(h_app, p=self.dropout, training=self.training)
+
+        # concat for gating
+        h_cat = torch.cat([h_mix, h_gat, h_app], dim=-1)   # [N, 3H]
+        w = torch.softmax(self.gate(h_cat), dim=-1)         # [N, 3]
+
+        # node-wise weighted fusion
+        h = (
+            w[:, 0:1] * h_mix +
+            w[:, 1:2] * h_gat +
+            w[:, 2:3] * h_app
+        )  # [N, H]
+
+        # linear classifier head
+        out = self.classifier(h)  # [N, out_channels]
+        return out

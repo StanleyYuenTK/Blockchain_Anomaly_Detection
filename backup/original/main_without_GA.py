@@ -97,8 +97,13 @@ def evaluate_model(model, data, mask, threshold):
     model.eval()
     with torch.no_grad():
         out = model(data.x, data.edge_index)
-        probs = torch.softmax(out[mask], dim=1)[:, 1]
+        
+        probs = torch.sigmoid(out[mask])
+        if probs.dim() > 1 and probs.size(1) == 2:
+            probs = probs[:, 1]
+            
         y_pred = (probs > threshold).cpu().numpy().flatten()
+        
         y_true = data.y[mask].cpu().numpy().flatten()
 
     return f1_score(y_true, y_pred, pos_label=1, zero_division=0)
@@ -211,63 +216,6 @@ def train_and_test_gnn(model_name, data, best_params={}):
 # Ensemble Learning - stacking
 # ==============================================================================
 # ==============================================================================
-# Genetic Algorithm - used to select GNN model for Stacking
-# https://pygad.readthedocs.io/en/latest/
-# ==============================================================================
-def fitness_func(ga_instance, solution, solution_idx, 
-                 X_val_raw, val_ts, X_val_meta, y_val, split_threshold):
-
-    selected_cols = np.where(solution == 1)[0]
-
-    if len(selected_cols) < MIN_GA_MODELS:
-        return 0
-    
-    ga_train_mask = (val_ts < split_threshold)
-    ga_val_mask = (val_ts >= split_threshold)
-
-    X_ga_train_raw = X_val_raw[ga_train_mask]
-    X_ga_val_raw = X_val_raw[ga_val_mask]
-    y_ga_train = y_val[ga_train_mask]
-    y_ga_val = y_val[ga_val_mask]
-
-    X_ga_train_meta = X_val_meta[ga_train_mask][:, selected_cols]
-    X_ga_val_meta = X_val_meta[ga_val_mask][:, selected_cols]
-
-    X_train_final = np.hstack([X_ga_train_raw, X_ga_train_meta])
-    X_val_final = np.hstack([X_ga_val_raw, X_ga_val_meta])
-
-    cat = CatBoostClassifier(
-        iterations=epochs,
-        early_stopping_rounds=(epochs*0.2),
-
-        learning_rate=0.03,
-        depth=4,
-        l2_leaf_reg=10,
-        loss_function='Logloss',
-        eval_metric='F1',
-        auto_class_weights='Balanced',
-
-        ## constant
-        random_seed=RANDOM_SEED,
-        task_type='GPU',
-        devices='0',
-        silent=True,
-        allow_writing_files=False,
-    )
-
-    cat.fit(X_train_final, y_ga_train, eval_set=(X_val_final, y_ga_val))
-    
-    preds = cat.predict(X_val_final)
-    probs = cat.predict_proba(X_val_final)[:, 1]
-
-    c1_f1 = f1_score(y_ga_val, preds)
-    macro_f1 = f1_score(y_ga_val, preds, average='macro')
-    auc = roc_auc_score(y_ga_val, probs)
-    weight_score = (w_c1_f1 * c1_f1) + (w_m_f1 * macro_f1) + (w_auc * auc)
-    return weight_score
-
-
-# ==============================================================================
 # TPE - Optuna
 # ==============================================================================
 
@@ -285,10 +233,11 @@ def catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold):
     X_ev = X_val_raw_meta[val_mask]
     y_ev = y_val[val_mask]
 
+
     # Define search space
     learning_rate = trial.suggest_float('learning_rate', 1e-3, 0.5, log=True)
     depth = trial.suggest_int('depth', 4, 10)
-    l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 0.01, 10, log=True)
+    l2_leaf_reg = trial.suggest_float('l2_leaf_reg', 1e-2, 10.0, log=True)
 
     cat = CatBoostClassifier(
         iterations=epochs,
@@ -308,6 +257,7 @@ def catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold):
         silent=True,
         allow_writing_files=False,
     )
+
 
     cat.fit(X_tr, y_tr, eval_set=(X_ev, y_ev), use_best_model=True)
 
@@ -361,9 +311,11 @@ def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params={}):
     ## process meta data
     X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate
     X_test_meta = np.hstack(gnns_test_probs)
+    # print(f"X_val_meta shape: {X_val_meta.shape}, X_test_meta shape: {X_test_meta.shape}")
 
     X_val_raw_meta = np.hstack([data.x[data.val_mask].numpy(), X_val_meta])
     X_test_raw_meta = np.hstack([data.x[data.test_mask].numpy(), X_test_meta])
+    # print(f"X_val_final shape: {X_val_raw_meta.shape}, X_test_final shape: {X_test_raw_meta.shape}")
 
     # Extract best parameters or use defaults
     iterations = epochs
@@ -374,6 +326,7 @@ def stacking_catboost(data, gnns_val_probs, gnns_test_probs, best_params={}):
     ## create catboost model and train and predict
     cat = CatBoostClassifier(
         iterations=iterations,
+        # early_stopping_rounds=(epochs*0.2),
         
         learning_rate=learning_rate,
         depth=depth,
@@ -484,9 +437,9 @@ def main(dataset_name):
     # TPE - Optuna optimal catboost hyperparameter
     # Stacking CatBoost
     # ========================================================================
-    # GA
-    # ========================================================================
-    print("\nGA Crossover model...")
+    # # GA
+    # # ========================================================================
+    # print("\nGA Crossover model...")
     X_val_raw = data.x[data.val_mask].numpy()
     val_ts = None
     if 'e1' in dataset_name: # e1 for elliptic
@@ -496,34 +449,34 @@ def main(dataset_name):
         val_ts = np.arange(X_val_raw.shape[0])
         split_threshold = int(len(val_ts) * 0.7)
 
-    X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate, GNN models gnn_val_probs
-    ff = lambda ga_instance, solution, solution_idx: fitness_func(
-        ga_instance, solution, solution_idx, 
-        X_val_raw, val_ts, X_val_meta, y_val, split_threshold
-    )
-    ga_instance = pygad.GA(
-        num_generations=10, 
-        sol_per_pop=10, 
-        num_parents_mating=5, 
-        fitness_func=ff,
-        num_genes=len(gnn_models_list),
-        parent_selection_type='tournament',
-        crossover_type="two_points",
-        mutation_type="random",
-        mutation_percent_genes=25,
-        mutation_num_genes=1,
-        gene_space=[0, 1]
-    )
-    ga_instance.run()
-    solution, solution_fitness, solution_idx = ga_instance.best_solution()
-    print(f"Parameters of the best solution : {solution}")
-    print(f"Fitness value of the best solution = {solution_fitness}")
+    # X_val_meta = np.hstack(gnns_val_probs)   # hstack same as concatenate, GNN models gnn_val_probs
+    # ff = lambda ga_instance, solution, solution_idx: fitness_func(
+    #     ga_instance, solution, solution_idx, 
+    #     X_val_raw, val_ts, X_val_meta, y_val, split_threshold
+    # )
+    # ga_instance = pygad.GA(
+    #     num_generations=10, 
+    #     sol_per_pop=10, 
+    #     num_parents_mating=5, 
+    #     fitness_func=ff,
+    #     num_genes=len(gnn_models_list),
+    #     parent_selection_type='tournament',
+    #     crossover_type="two_points",
+    #     mutation_type="random",
+    #     mutation_percent_genes=25,
+    #     mutation_num_genes=1,
+    #     gene_space=[0, 1]
+    # )
+    # ga_instance.run()
+    # solution, solution_fitness, solution_idx = ga_instance.best_solution()
+    # print(f"Parameters of the best solution : {solution}")
+    # print(f"Fitness value of the best solution = {solution_fitness}")
 
-    print(f"\nTPE - Optuna - optimize CatBoost with GA selection: {solution}...")
-    selected_indices = [i for i, bit in enumerate(solution) if bit == 1] #  [1, 0, 1, 0, 1] => [0, 2, 4]
-    filtered_val_probs = [gnns_val_probs[i] for i in selected_indices]
-    filtered_test_probs = [gnns_test_probs[i] for i in selected_indices]
-    print(f"Using {len(selected_indices)} models selected by GA for final Stacking.")
+    # print(f"\nTPE - Optuna - optimize CatBoost with GA selection: {solution}...")
+    # selected_indices = [i for i, bit in enumerate(solution) if bit == 1] #  [1, 0, 1, 0, 1] => [0, 2, 4]
+    # filtered_val_probs = [gnns_val_probs[i] for i in selected_indices]
+    # filtered_test_probs = [gnns_test_probs[i] for i in selected_indices]
+    # print(f"Using {len(selected_indices)} models selected by GA for final Stacking.")
     
 
     # ========================================================================
@@ -531,7 +484,7 @@ def main(dataset_name):
     # ========================================================================
     
     study = optuna.create_study(direction='maximize')
-    study.optimize(lambda trial: catboost_objective(trial, data, filtered_val_probs, val_ts, split_threshold), n_trials=n_trials)
+    study.optimize(lambda trial: catboost_objective(trial, data, gnns_val_probs, val_ts, split_threshold), n_trials=n_trials)
     best_trial = study.best_trial
     cat_best_params = best_trial.params
     print(f"Best hyperparameters - CatBoost: {cat_best_params}")
@@ -540,7 +493,7 @@ def main(dataset_name):
     # stacking ensemble model
     # ========================================================================
     print("\nStacking CatBoost...")
-    cat_test_preds, cat_test_probs = stacking_catboost(data, filtered_val_probs, filtered_test_probs, cat_best_params)
+    cat_test_preds, cat_test_probs = stacking_catboost(data, gnns_val_probs, gnns_test_probs, cat_best_params)
     cat_test_performance = eval_stacking_catboost(y_test, cat_test_preds, cat_test_probs)
     models_test_performance.append(cat_test_performance)
     df_cat_preformance = pd.DataFrame([cat_test_performance])
