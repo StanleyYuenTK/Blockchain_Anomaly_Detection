@@ -71,7 +71,6 @@ We evaluated several Graph Neural Network (GNN) models and an ensemble learning 
 
 1. Base GNNs vs. Advanced GNNs
 Hyperparameter Tuning Impact: After rigorous hyperparameter tuning (specifically adjusting the number of layers), the base GNN models (GCN, GAT, GIN, and GraphSAGE) achieved performance comparable to more complex models like APPNP, ChebNet, and MixHop on the test set.
-
 Layer Depth vs. Hop Count: Adjusting the layer depth in base GNNs effectively boosts anomaly detection performance. Conversely, advanced models (APPNP, ChebNet, MixHop) did not show significant performance gains as the number of hops increased.
 
 2. CatBoost Performance (The Winning Approach)
